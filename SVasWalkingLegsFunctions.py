@@ -37,7 +37,7 @@ def ManualPolyData():
 
 
 def initialize_walking_legs(renderer):
-    folder = "../../CFD/modelFrame03"
+    folder = "../CFD/modelFrame03"
     file_pattern = os.path.join(folder, "case_t*.vtu")
     files = sorted(glob.glob(file_pattern))
 
@@ -147,9 +147,6 @@ def initialize_walking_legs(renderer):
     o2mus_actor2.GetProperty().SetOpacity(0.3)
 
     proper_pdata = ManualPolyData()
-    proper_points = proper_pdata.GetPoints()
-    for i in range(proper_points.GetNumberOfPoints()):
-        print(f"proper_points.GetPoint(i) {proper_points.GetPoint(i)}")
     proper_mapper = vtk.vtkPolyDataMapper()
     proper_mapper.SetInputData(proper_pdata)
     proper_actor = vtk.vtkActor()

@@ -10,9 +10,12 @@ from SVasWalkingLegsFunctions import initialize_walking_legs, update_walking_leg
 import SVasSliderUtils
 importlib.reload(SVasSliderUtils)
 from SVasSliderUtils import create_slider_widget
+import SVasToggleButton
+importlib.reload(SVasToggleButton)
+from SVasToggleButton import ToggleButton
 
 # === Load VTP File ===
-single_file = "../12_AortoFem_Pulse_R_output_verified.vtp"
+single_file = "12_AortoFem_Pulse_R_output_verified.vtp"
 data_list, polydata, field_time_map = SVas_TimeArr(single_file)
 
 fields = sorted(set(field_time_map.keys()))
@@ -67,26 +70,6 @@ add_label("WSS", renderers[2], 0.02, 0.9)
 add_label("Pulse Curves", renderers[3], 0.02, 0.9)
 add_label("O2 Dynamics of Walking Legs", renderers[4], 0.02, 0.9)
 
-# === Camera Toggle ===
-camera_toggle = [True]
-
-def toggle_camera(obj, event):
-    global step
-    camera_toggle[0] = not camera_toggle[0]
-    for i in range(3):
-        ren = renderers[i]
-        ren.SetActiveCamera(shared_camera if camera_toggle[0] else vtk.vtkCamera())
-        ren.ResetCamera()
-    ren_win.Render()
-
-camera_button = vtk.vtkTextActor()
-camera_button.SetInput("Toggle Camera")
-camera_button.GetTextProperty().SetFontSize(18)
-camera_button.GetTextProperty().SetColor(1, 1, 0)
-camera_button.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-camera_button.SetPosition(0.02, 0.02)
-renderers[0].AddActor2D(camera_button)
-
 # === Animation State ===
 actors = [vtk.vtkActor() for _ in fields]
 step = 0
@@ -122,23 +105,29 @@ shared_camera = vtk.vtkCamera()
 for ren in renderers[:3]:
     ren.SetActiveCamera(shared_camera)
 
+# === Camera Toggle ===
+def toggle_camera_on(exec):
+    if exec:
+        for i in range(3):
+            ren = renderers[i]
+            ren.ResetCamera()
+        ren_win.Render()
+
+# === Camera Toggle Button ===
+camera_toggle_button = ToggleButton(
+    text="Camera",
+    x=0.02,
+    y=0.02,
+    radius=0.05,
+    renderer=renderers[0],
+    interactor=interactor,
+    font_size=24,  # Set a custom font size
+    exec_func=toggle_camera_on  # Pass the function to execute
+)
+
 # Set individual cameras for curve and walking legs renderers
 for i in range(3, 5):
     renderers[i].SetActiveCamera(vtk.vtkCamera())
-
-# === Picker for Toggle Buttons ===
-picker = vtk.vtkPropPicker()
-
-def on_left_click(obj, event):
-    x, y = interactor.GetEventPosition()
-    picker.Pick(x, y, 0, renderers[0])
-    if picker.GetActor2D() == camera_button:
-        toggle_camera(obj, event)
-    picker.Pick(x, y, 0, controller_renderer)
-    if picker.GetActor2D() == video_button:
-        start_video_recording()
-
-interactor.AddObserver("LeftButtonPressEvent", on_left_click)
 
 # === Slider Widgets ===
 # Create sliders using the utility function
@@ -147,7 +136,9 @@ slider_point, widget_point = create_slider_widget(
     title="Point",
     min_value=0,
     max_value=len(data_list) - 1,
-    y_position=0.17,
+    x1_pos=0.01,
+    x2_pos=0.31,
+    y_pos=0.15,
     slider_color=(0.1, 0.8, 0.1)
 )
 
@@ -156,7 +147,9 @@ slider_time, widget_timer = create_slider_widget(
     title="Pulse Frame /80",
     min_value=0,
     max_value=len(data_list) - 1,
-    y_position=0.12,
+    x1_pos=0.35,
+    x2_pos=0.65,
+    y_pos=0.15,
     slider_color=(0.3, 0.3, 0.8)
 )
 
@@ -165,7 +158,9 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
     title="Walking Frame /50",
     min_value=0,
     max_value=walking_num_timesteps - 1,
-    y_position=0.07,
+    x1_pos=0.68,
+    x2_pos=0.98,
+    y_pos=0.15,
     slider_color=(0.8, 0.3, 0.3)
 )
 
