@@ -12,7 +12,7 @@ importlib.reload(SVasSliderUtils)
 from SVasSliderUtils import create_slider_widget
 
 # === Load VTP File ===
-single_file = "12_AortoFem_Pulse_R_output_verified.vtp"
+single_file = "../12_AortoFem_Pulse_R_output_verified.vtp"
 data_list, polydata, field_time_map = SVas_TimeArr(single_file)
 
 fields = sorted(set(field_time_map.keys()))

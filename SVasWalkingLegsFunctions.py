@@ -4,58 +4,57 @@ import os
 import numpy as np
 from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
 
-def create_scalar_bar(lookup_table, title, position, font_size=60, orientation=90):
-    scalar_bar = vtk.vtkScalarBarActor()
-    scalar_bar.SetLookupTable(lookup_table)
-    scalar_bar.SetTitle(title)
-    scalar_bar.SetNumberOfLabels(4)
-    scalar_bar.SetOrientationToVertical()
-    scalar_bar.SetPosition(position[0], position[1])
-    scalar_bar.SetWidth(0.1)
-    scalar_bar.SetHeight(0.8)
-    title_prop = vtk.vtkTextProperty()
-    title_prop.SetFontSize(font_size)
-    title_prop.SetColor(1, 1, 1)
-    title_prop.SetBold(1)
-    title_prop.SetOrientation(orientation)
-    scalar_bar.SetTitleTextProperty(title_prop)
-    scalar_bar.GetLabelTextProperty().SetOrientation(orientation)
-    scalar_bar.SetTextPositionToPrecedeScalarBar()
-    scalar_bar.Modified()
-    return scalar_bar
+def ManualPolyData():
+    points = vtk.vtkPoints()
+    cells = vtk.vtkCellArray()
+    
+    scalex = 0.020
+    scaley = 0.030
+    scalez = 0.01
+    
+    # Add points
+    points.InsertNextPoint(-2.*scalex+0.005, 0*scaley, 0*scalez)
+    points.InsertNextPoint(-1.*scalex+0.005, 1*scaley, 0*scalez)
+    points.InsertNextPoint(-1.*scalex+0.005, 4*scaley, 0*scalez)
+    points.InsertNextPoint(-2.*scalex+0.005, 5*scaley, 0*scalez)
+    points.InsertNextPoint(-3.*scalex+0.005, 5*scaley, 0*scalez)
+    points.InsertNextPoint(-4.*scalex+0.005, 4*scaley, 0*scalez)
+    points.InsertNextPoint(-4.*scalex+0.005, 1*scaley, 0*scalez)
+    points.InsertNextPoint(-3.*scalex+0.005, 0*scaley, 0*scalez)
+    
+    # Create a closed polygon (connect all points in order and back to start)
+    polygon = vtk.vtkPolygon()
+    polygon.GetPointIds().SetNumberOfIds(8)
+    for i in range(8):
+        polygon.GetPointIds().SetId(i, i)
+    cells.InsertNextCell(polygon)
+    
+    polydata = vtk.vtkPolyData()
+    polydata.SetPoints(points)
+    polydata.SetPolys(cells)  # Use SetPolys for polygons
+    
+    return polydata
 
-def create_actor_mapper(poly_data=None, lookup_table=None, scalar_array=None, opacity=1.0):
-    mapper = vtk.vtkPolyDataMapper()
-    if poly_data:
-        mapper.SetInputData(poly_data)
-    if lookup_table and scalar_array:
-        mapper.SetLookupTable(lookup_table)
-        mapper.ScalarVisibilityOn()
-        mapper.SetScalarModeToUsePointFieldData()
-        mapper.SelectColorArray(scalar_array)
-    else:
-        mapper.ScalarVisibilityOff()
-    actor = vtk.vtkActor()
-    actor.SetMapper(mapper)
-    actor.GetProperty().SetOpacity(opacity)
-    return mapper, actor
 
 def initialize_walking_legs(renderer):
-    folder = "../CFD/modelFrame03"
+    folder = "../../CFD/modelFrame03"
     file_pattern = os.path.join(folder, "case_t*.vtu")
     files = sorted(glob.glob(file_pattern))
 
+    # Debugging: Print folder and file information
     print(f"Loading VTU files from: {os.path.abspath(folder)}")
     print(f"File pattern: {file_pattern}")
-    print(f"Found {len(files)} files: {files}")
+    print(f"Found {len(files)} files")
 
+    # Check for empty files list
     if not files:
-        raise FileNotFoundError(f"No VTU files found in {os.path.abspath(folder)} matching pattern 'case_t*.vtu'.")
+        raise FileNotFoundError(f"No VTU files found in {os.path.abspath(folder)} matching pattern 'case_t*.vtu'. Please verify the folder and files exist.")
 
     reader = vtk.vtkXMLUnstructuredGridReader()
     geometry_filter = vtk.vtkGeometryFilter()
     arrow = vtk.vtkArrowSource()
-
+    
+    # First leg glyph (velocity)
     glyph = vtk.vtkGlyph3D()
     glyph.SetSourceConnection(arrow.GetOutputPort())
     glyph.SetVectorModeToUseVector()
@@ -65,6 +64,20 @@ def initialize_walking_legs(renderer):
     glyph.SetInputArrayToProcess(1, 0, 0, 0, "velocity_dir")
     glyph.SetInputArrayToProcess(0, 0, 0, 0, "velocity_mag")
 
+    lut_velocity = vtk.vtkLookupTable()
+    lut_velocity.SetHueRange(0.667, 0.0)
+    lut_velocity.Build()
+
+    mapper = vtk.vtkPolyDataMapper()
+    mapper.SetLookupTable(lut_velocity)
+    mapper.ScalarVisibilityOn()
+    mapper.SetScalarModeToUsePointFieldData()
+    mapper.SelectColorArray("velocity_mag")
+
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+
+    # Second leg glyph (velocity)
     glyph2 = vtk.vtkGlyph3D()
     glyph2.SetSourceConnection(arrow.GetOutputPort())
     glyph2.SetVectorModeToUseVector()
@@ -74,31 +87,78 @@ def initialize_walking_legs(renderer):
     glyph2.SetInputArrayToProcess(1, 0, 0, 0, "velocity_dir")
     glyph2.SetInputArrayToProcess(0, 0, 0, 0, "velocity_mag")
 
-    lut_velocity = vtk.vtkLookupTable()
-    lut_velocity.SetHueRange(0.667, 0.0)
-    lut_velocity.Build()
+    mapper2 = vtk.vtkPolyDataMapper()
+    mapper2.SetLookupTable(lut_velocity)
+    mapper2.ScalarVisibilityOn()
+    mapper2.SetScalarModeToUsePointFieldData()
+    mapper2.SelectColorArray("velocity_mag")
 
-    mapper, actor = create_actor_mapper(None, lut_velocity, "velocity_mag")
-    mapper2, actor2 = create_actor_mapper(None, lut_velocity, "velocity_mag")
+    actor2 = vtk.vtkActor()
+    actor2.SetMapper(mapper2)
 
+    # O2Vas actors (vascular pipes)
     lut_o2 = vtk.vtkLookupTable()
     lut_o2.SetHueRange(0.667, 0.0)
     lut_o2.Build()
 
-    o2_mapper, o2_actor = create_actor_mapper(None, lut_o2, "o2vas", opacity=0.5)
-    o2_mapper2, o2_actor2 = create_actor_mapper(None, lut_o2, "o2vas", opacity=0.5)
+    o2_mapper = vtk.vtkPolyDataMapper()
+    o2_mapper.SetLookupTable(lut_o2)
+    o2_mapper.ScalarVisibilityOn()
+    o2_mapper.SetScalarModeToUsePointFieldData()
+    o2_mapper.SelectColorArray("o2vas")
 
+    o2_actor = vtk.vtkActor()
+    o2_actor.SetMapper(o2_mapper)
+    o2_actor.GetProperty().SetOpacity(0.5)
+
+    o2_mapper2 = vtk.vtkPolyDataMapper()
+    o2_mapper2.SetLookupTable(lut_o2)
+    o2_mapper2.ScalarVisibilityOn()
+    o2_mapper2.SetScalarModeToUsePointFieldData()
+    o2_mapper2.SelectColorArray("o2vas")
+
+    o2_actor2 = vtk.vtkActor()
+    o2_actor2.SetMapper(o2_mapper2)
+    o2_actor2.GetProperty().SetOpacity(0.5)
+
+    # O2Mus actors (muscles)
     lut_o2mus = vtk.vtkLookupTable()
-    lut_o2mus.SetHueRange(0.333, 0.0)
+    lut_o2mus.SetHueRange(0.333, 0.0)  # Green to red for distinction
     lut_o2mus.Build()
 
-    o2mus_mapper, o2mus_actor = create_actor_mapper(None, lut_o2mus, "o2mus", opacity=0.3)
-    o2mus_mapper2, o2mus_actor2 = create_actor_mapper(None, lut_o2mus, "o2mus", opacity=0.3)
+    o2mus_mapper = vtk.vtkPolyDataMapper()
+    o2mus_mapper.SetLookupTable(lut_o2)
+    o2mus_mapper.ScalarVisibilityOn()
+    o2mus_mapper.SetScalarModeToUsePointFieldData()
+    o2mus_mapper.SelectColorArray("o2mus")
 
-    proper_poly_data = vtk.vtkPolyData()
-    proper_mapper, proper_actor = create_actor_mapper(proper_poly_data, None, None, opacity=1.0)
-    proper_actor.GetProperty().SetColor(1, 0, 0)
+    o2mus_actor = vtk.vtkActor()
+    o2mus_actor.SetMapper(o2mus_mapper)
+    o2mus_actor.GetProperty().SetOpacity(0.3)  # Lower opacity for distinction
 
+    o2mus_mapper2 = vtk.vtkPolyDataMapper()
+    o2mus_mapper2.SetLookupTable(lut_o2)
+    o2mus_mapper2.ScalarVisibilityOn()
+    o2mus_mapper2.SetScalarModeToUsePointFieldData()
+    o2mus_mapper2.SelectColorArray("o2mus")
+
+    o2mus_actor2 = vtk.vtkActor()
+    o2mus_actor2.SetMapper(o2mus_mapper2)
+    o2mus_actor2.GetProperty().SetOpacity(0.3)
+
+    proper_pdata = ManualPolyData()
+    proper_points = proper_pdata.GetPoints()
+    for i in range(proper_points.GetNumberOfPoints()):
+        print(f"proper_points.GetPoint(i) {proper_points.GetPoint(i)}")
+    proper_mapper = vtk.vtkPolyDataMapper()
+    proper_mapper.SetInputData(proper_pdata)
+    proper_actor = vtk.vtkActor()
+    proper_actor.SetMapper(proper_mapper)
+    proper_actor.GetProperty().SetOpacity(0.3) 
+    proper_actor.GetProperty().SetColor(1,0,0) 
+    proper_actor.GetProperty().EdgeVisibilityOn()
+
+    # Add actors to renderer
     renderer.AddActor(actor)
     renderer.AddActor(actor2)
     renderer.AddActor(o2_actor)
@@ -107,24 +167,25 @@ def initialize_walking_legs(renderer):
     renderer.AddActor(o2mus_actor2)
     renderer.AddActor(proper_actor)
 
-    velocity_bar = create_scalar_bar(lut_velocity, "Velocity Mag", [0.91, 0.2])
-    o2_bar = create_scalar_bar(lut_o2, "O2 Vasculature", [0.01, 0.2])
-    o2mus_bar = create_scalar_bar(lut_o2mus, "O2 Muscles", [0.15, 0.2])
-
-    renderer.AddActor2D(velocity_bar)
+    o2_bar = vtk.vtkScalarBarActor()
+    o2_bar.SetLookupTable(lut_o2)
+    o2_bar.SetNumberOfLabels(4)
+    o2_bar.SetOrientationToVertical()
+    o2_bar.SetPosition(0.01, 0.02)
+    o2_bar.SetWidth(0.1)
+    o2_bar.SetHeight(0.8)
+    o2_bar.Modified()
     renderer.AddActor2D(o2_bar)
-    renderer.AddActor2D(o2mus_bar)
-    print(f"Velocity bar: Position=[0.91, 0.2], Title Font Size=60, Title Orientation=90, Label Orientation=90")
-    print(f"O2 bar: Position=[0.01, 0.2], Title Font Size=60, Title Orientation=90, Label Orientation=90")
-    print(f"O2Mus bar: Position=[0.15, 0.2], Title Font Size=60, Title Orientation=90, Label Orientation=90")
 
+    # Text actor
     text_actor = vtk.vtkTextActor()
     text_actor.GetTextProperty().SetFontSize(18)
     text_actor.GetTextProperty().SetColor(1, 1, 1)
     text_actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-    text_actor.SetPosition(0.22, 0.82)
+    text_actor.SetPosition(0.80, 0.90)
     renderer.AddActor2D(text_actor)
 
+    # State
     state = {
         'renderer': renderer,
         'files': files,
@@ -144,9 +205,6 @@ def initialize_walking_legs(renderer):
         'o2_actor2': o2_actor2,
         'o2mus_actor': o2mus_actor,
         'o2mus_actor2': o2mus_actor2,
-        'proper_poly_data': proper_poly_data,
-        'proper_mapper': proper_mapper,
-        'proper_actor': proper_actor,
         'text_actor': text_actor,
         'current_index': 0,
         'frames_period': 50,
@@ -157,9 +215,10 @@ def initialize_walking_legs(renderer):
     return state
 
 def project_onto_leg_motion(index, coords, velocity_array, phase_offset=0.0, frames_period=50, contract_y=False):
+    # Apply y-coordinate contraction if specified (for vascular pipes)
     if contract_y:
         coords = coords.copy()
-        coords[:, 1] *= 0.1
+        coords[:, 1] *= 0.1  # Contract y to 10%
 
     A0 = np.array([-0.045, 0.0, 0.0])
     B0 = np.array([0.045, 0.0, 0.0])
@@ -205,22 +264,6 @@ def project_onto_leg_motion(index, coords, velocity_array, phase_offset=0.0, fra
 
     return np.array(new_coords), np.array(rotated_velocity)
 
-def transform_proper_actor(coords, index, frames_period=50):
-    A0 = np.array([-0.045, 0.0, 0.0])
-    coords = coords.copy()
-    coords[:, 1] *= 2.0
-    theta = np.deg2rad(90)
-    rotation = np.array([
-        [np.cos(theta), -np.sin(theta), 0.0],
-        [np.sin(theta),  np.cos(theta), 0.0],
-        [0.0,           0.0,          1.0]
-    ])
-    new_coords = []
-    for pt in coords:
-        n_pt = rotation @ (pt - A0) + A0
-        new_coords.append(n_pt)
-    return np.array(new_coords)
-
 def update_walking_legs(state, index):
     files = state['files']
     reader = state['reader']
@@ -234,9 +277,6 @@ def update_walking_legs(state, index):
     o2_mapper2 = state['o2_mapper2']
     o2mus_mapper = state['o2mus_mapper']
     o2mus_mapper2 = state['o2mus_mapper2']
-    proper_poly_data = state['proper_poly_data']
-    proper_mapper = state['proper_mapper']
-    proper_actor = state['proper_actor']
     actor = state['actor']
     actor2 = state['actor2']
     o2_actor = state['o2_actor']
@@ -246,64 +286,59 @@ def update_walking_legs(state, index):
     text_actor = state['text_actor']
     frames_period = state['frames_period']
 
+    # Check for empty files list
     if not files:
         text_actor.SetInput("Error: No VTU files found in modelFrame03")
         return
 
+    # Ensure valid index
     walking_index = index % len(files)
     if walking_index < 0 or walking_index >= len(files):
         text_actor.SetInput(f"Invalid Frame: {walking_index}")
         return
     state['current_index'] = walking_index
 
+    # Read VTU file
     reader.SetFileName(files[walking_index])
     reader.Update()
     geometry_filter.SetInputData(reader.GetOutput())
     geometry_filter.Update()
     poly_data_base = geometry_filter.GetOutput()
 
+    # Create polydata for vascular pipes (velocity and O2Vas)
     poly_data = vtk.vtkPolyData()
     poly_data.DeepCopy(poly_data_base)
     poly_data2 = vtk.vtkPolyData()
     poly_data2.DeepCopy(poly_data_base)
+
+    # Create polydata for muscles (O2Mus)
     poly_data_mus = vtk.vtkPolyData()
     poly_data_mus.DeepCopy(poly_data_base)
     poly_data_mus2 = vtk.vtkPolyData()
     poly_data_mus2.DeepCopy(poly_data_base)
-
-    threshold = vtk.vtkThresholdPoints()
-    threshold.SetInputData(poly_data_base)
-    threshold.ThresholdByUpper(0.045)
-    threshold.SetInputArrayToProcess(0, 0, 0, vtk.vtkDataObject.FIELD_ASSOCIATION_POINTS, "Points.X")
-    threshold.Update()
-    proper_poly_data.DeepCopy(threshold.GetOutput())
 
     points = poly_data.GetPoints()
     coords = vtk_to_numpy(points.GetData())
     velocity_array = poly_data.GetPointData().GetArray("velocity")
     velocity_array_np = vtk_to_numpy(velocity_array) if velocity_array else None
 
+    # First leg: Vascular pipes (with y-contraction)
     scaled_coords, vec_np = project_onto_leg_motion(walking_index, coords, velocity_array_np, phase_offset=0.0, frames_period=frames_period, contract_y=True)
     poly_data.GetPoints().SetData(numpy_to_vtk(scaled_coords, deep=True))
 
+    # Second leg: Vascular pipes (with y-contraction)
     scaled_coords2, vec_np2 = project_onto_leg_motion(walking_index, coords, velocity_array_np, phase_offset=np.pi, frames_period=frames_period, contract_y=True)
     poly_data2.GetPoints().SetData(numpy_to_vtk(scaled_coords2, deep=True))
 
+    # First leg: Muscles (no y-contraction)
     scaled_coords_mus, _ = project_onto_leg_motion(walking_index, coords, None, phase_offset=0.0, frames_period=frames_period, contract_y=False)
     poly_data_mus.GetPoints().SetData(numpy_to_vtk(scaled_coords_mus, deep=True))
 
+    # Second leg: Muscles (no y-contraction)
     scaled_coords_mus2, _ = project_onto_leg_motion(walking_index, coords, None, phase_offset=np.pi, frames_period=frames_period, contract_y=False)
     poly_data_mus2.GetPoints().SetData(numpy_to_vtk(scaled_coords_mus2, deep=True))
 
-    proper_points = proper_poly_data.GetPoints()
-    if proper_points and proper_points.GetNumberOfPoints() > 0:
-        proper_coords = vtk_to_numpy(proper_points.GetData())
-        transformed_coords = transform_proper_actor(proper_coords, walking_index, frames_period)
-        proper_poly_data.GetPoints().SetData(numpy_to_vtk(transformed_coords, deep=True))
-        print(f"Proper actor: {proper_poly_data.GetNumberOfPoints()} points transformed")
-    else:
-        print("Proper actor: No points with x <= 0.045")
-
+    # Process velocity for first leg
     if velocity_array_np is not None:
         norms = np.linalg.norm(vec_np, axis=1)
         norms[norms < 1e-9] = 1e-9
@@ -324,6 +359,7 @@ def update_walking_legs(state, index):
         mapper.SetScalarRange(clamped.min(), clamped.max())
         glyph.SetScaleFactor(0.015 * region_scale / clamped.max())
 
+    # Process velocity for second leg
     if velocity_array_np is not None:
         norms2 = np.linalg.norm(vec_np2, axis=1)
         norms2[norms2 < 1e-9] = 1e-9
@@ -338,9 +374,10 @@ def update_walking_legs(state, index):
         scaled_log_vtk2.SetName("velocity_mag")
         poly_data2.GetPointData().AddArray(scaled_log_vtk2)
 
-        mapper2.SetScalarRange(clamped2.min(), clamped.max())
+        mapper2.SetScalarRange(clamped2.min(), clamped2.max())
         glyph2.SetScaleFactor(0.015 * region_scale / clamped2.max())
 
+    # Process O2Vas for first leg
     o2_array = poly_data.GetPointData().GetArray("o2vas")
     if o2_array:
         o2_np = vtk_to_numpy(o2_array)
@@ -349,10 +386,11 @@ def update_walking_legs(state, index):
         o2_vtk.SetName("o2vas")
         poly_data.GetPointData().AddArray(o2_vtk)
         o2_mapper.SetInputData(poly_data)
-        o2_mapper.SetScalarRange(o2_clamped.min(), o2_clamped.max())
+        o2_mapper.SetScalarRange(20, 80)
         o2_mapper.Update()
         o2_actor.Modified()
 
+    # Process O2Vas for second leg
     if o2_array:
         o2_np2 = vtk_to_numpy(o2_array)
         o2_clamped2 = np.clip(o2_np2, np.percentile(o2_np2, 0), np.percentile(o2_np2, 100))
@@ -360,10 +398,11 @@ def update_walking_legs(state, index):
         o2_vtk2.SetName("o2vas")
         poly_data2.GetPointData().AddArray(o2_vtk2)
         o2_mapper2.SetInputData(poly_data2)
-        o2_mapper2.SetScalarRange(o2_clamped2.min(), o2_clamped2.max())
+        o2_mapper2.SetScalarRange(20, 80)
         o2_mapper2.Update()
         o2_actor2.Modified()
 
+    # Process O2Mus for first leg
     o2mus_array = poly_data_mus.GetPointData().GetArray("o2mus")
     if o2mus_array:
         o2mus_np = vtk_to_numpy(o2mus_array)
@@ -372,10 +411,11 @@ def update_walking_legs(state, index):
         o2mus_vtk.SetName("o2mus")
         poly_data_mus.GetPointData().AddArray(o2mus_vtk)
         o2mus_mapper.SetInputData(poly_data_mus)
-        o2mus_mapper.SetScalarRange(o2mus_clamped.min(), o2mus_clamped.max())
+        o2mus_mapper.SetScalarRange(20, 80)
         o2mus_mapper.Update()
         o2mus_actor.Modified()
 
+    # Process O2Mus for second leg
     if o2mus_array:
         o2mus_np2 = vtk_to_numpy(o2mus_array)
         o2mus_clamped2 = np.clip(o2mus_np2, np.percentile(o2mus_np2, 0), np.percentile(o2mus_np2, 100))
@@ -383,7 +423,7 @@ def update_walking_legs(state, index):
         o2mus_vtk2.SetName("o2mus")
         poly_data_mus2.GetPointData().AddArray(o2mus_vtk2)
         o2mus_mapper2.SetInputData(poly_data_mus2)
-        o2mus_mapper2.SetScalarRange(o2mus_clamped2.min(), o2mus_clamped.max())
+        o2mus_mapper2.SetScalarRange(20, 80)
         o2mus_mapper2.Update()
         o2mus_actor2.Modified()
 
@@ -399,11 +439,7 @@ def update_walking_legs(state, index):
     mapper2.Update()
     actor2.Modified()
 
-    proper_mapper.SetInputData(proper_poly_data)
-    proper_mapper.Update()
-    proper_actor.Modified()
-
     text_actor.SetInput(f"Frame: {walking_index}")
-    if index == 0:
+    if index==0:
         renderer.ResetCamera()
 
