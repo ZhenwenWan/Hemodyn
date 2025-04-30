@@ -246,6 +246,8 @@ def timer_callback(obj, event):
     update_walking_legs(walking_legs_state, walking_step)
     ren_win.Render()
 
+for idx in range(len(renderers)):
+    renderers[idx].ResetCamera()
 interactor.AddObserver("KeyPressEvent", on_keypress)
 interactor.AddObserver("TimerEvent", timer_callback)
 interactor.Initialize()

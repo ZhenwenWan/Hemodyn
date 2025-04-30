@@ -168,7 +168,7 @@ def initialize_walking_legs(renderer):
     o2_bar.SetLookupTable(lut_o2)
     o2_bar.SetNumberOfLabels(4)
     o2_bar.SetOrientationToVertical()
-    o2_bar.SetPosition(0.01, 0.02)
+    o2_bar.SetPosition(0.01, 0.08)
     o2_bar.SetWidth(0.1)
     o2_bar.SetHeight(0.8)
     o2_bar.Modified()
