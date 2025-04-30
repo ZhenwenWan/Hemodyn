@@ -125,6 +125,21 @@ for actor in field_actors:
     if actor.GetInput().lower() == selected_field:
         actor.GetTextProperty().SetColor(0, 1, 0)
 
+# === Menu for Record 10s/30s in renderers[4] ===
+record_options = ["Record 10s", "Record 30s"]
+record_actors = []
+selected_record = None  # No default selection
+
+for i, option in enumerate(record_options):
+    actor = vtk.vtkTextActor()
+    actor.SetInput(option)
+    actor.GetTextProperty().SetFontSize(18)
+    actor.GetTextProperty().SetColor(1, 1, 1)
+    actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
+    actor.SetPosition(0.02, 0.18 - i * 0.12)
+    renderers[4].AddActor2D(actor)
+    record_actors.append(actor)
+
 # === Animation State ===
 step = 0
 walking_step = 0
@@ -132,29 +147,12 @@ is_animating = False
 
 # === Video Recording Setup ===
 def start_video_recording():
-    SVasVideo(ren_win, video_button, interactor)
-
-video_button = vtk.vtkTextActor()
-video_button.SetInput("Record 10s")
-video_button.GetTextProperty().SetFontSize(24)
-video_button.GetTextProperty().SetColor(0, 1, 0)
-video_button.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-video_button.SetPosition(0.02, 0.05)
-renderers[4].AddActor2D(video_button)
-
-def video_button_callback(obj, event):
-    if event == "LeftButtonPressEvent":
-        x, y = interactor.GetEventPosition()
-        width, height = ren_win.GetSize()
-        nx = x / width
-        ny = y / height
-        if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 0.2:
-            if abs(nx - 0.02) < 0.1 and abs(ny - 0.05) < 0.05:
-                start_video_recording()
+    duration = 30 if selected_record == "Record 30s" else 10
+    SVasVideo(ren_win, record_actors, selected_record, interactor, duration)
 
 # === Menu Interaction ===
 def menu_interaction_callback(obj, event):
-    global selected_mode, selected_field
+    global selected_mode, selected_field, selected_record
     x, y = interactor.GetEventPosition()
     width, height = ren_win.GetSize()
     nx = x / width
@@ -206,7 +204,31 @@ def menu_interaction_callback(obj, event):
             else:
                 actor.GetTextProperty().SetColor(1, 1, 1)
 
-    if event == "LeftButtonPressEvent":
+    # renderers[4] menu (Record 10s/30s)
+    if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 0.2:
+        ny_remapped = ny / 0.2
+        hovered = None
+        for i, actor in enumerate(record_actors):
+            y_pos = 0.15 - i * 0.04
+            if abs(ny_remapped - y_pos) < 0.02:
+                hovered = actor.GetInput()
+                if event == "LeftButtonPressEvent":
+                    selected_record = hovered
+                    start_video_recording()
+            if actor.GetInput() == selected_record:
+                actor.GetTextProperty().SetColor(0, 1, 0)
+            elif actor.GetInput() == hovered:
+                actor.GetTextProperty().SetColor(0, 0, 1)
+            else:
+                actor.GetTextProperty().SetColor(1, 1, 1)
+    else:
+        for actor in record_actors:
+            if actor.GetInput() == selected_record:
+                actor.GetTextProperty().SetColor(0, 1, 0)
+            else:
+                actor.GetTextProperty().SetColor(1, 1, 1)
+
+    if event == "LeftButtonPressEvent" and (0.333 <= nx <= 0.667 and 0.2 <= ny <= 1.0):
         load_frame(step)
     ren_win.Render()
 
@@ -214,7 +236,6 @@ def menu_interaction_callback(obj, event):
 interactor = vtk.vtkRenderWindowInteractor()
 interactor.SetRenderWindow(ren_win)
 interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
-interactor.AddObserver("LeftButtonPressEvent", video_button_callback)
 interactor.AddObserver("LeftButtonPressEvent", menu_interaction_callback)
 interactor.AddObserver("MouseMoveEvent", menu_interaction_callback)
 for ren in renderers:

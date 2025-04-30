@@ -1,9 +1,9 @@
-def SVasVideo(ren_win, video_button, interactor):
-    import numpy as np
-    import imageio.v2 as imageio
-    from vtk.util import numpy_support
-    import vtk
+import numpy as np
+import imageio.v2 as imageio
+from vtk.util import numpy_support
+import vtk
 
+def SVasVideo(ren_win, record_actors, selected_record, interactor, duration):
     w2i = vtk.vtkWindowToImageFilter()
     w2i.SetInputBufferTypeToRGB()
     w2i.ReadFrontBufferOff()
@@ -12,12 +12,18 @@ def SVasVideo(ren_win, video_button, interactor):
 
     writer = imageio.get_writer("video.mp4", format='ffmpeg', fps=30)
 
-    video_button.SetInput("Recording")
-    video_button.GetTextProperty().SetColor(1, 0, 0)
+    # Update the selected record actor to show "Recording"
+    for actor in record_actors:
+        if actor.GetInput() == selected_record:
+            actor.SetInput("Recording")
+            actor.GetTextProperty().SetColor(1, 0, 0)
+        else:
+            actor.GetTextProperty().SetColor(1, 1, 1)
     ren_win.Render()
 
     def capture_frames(obj, event):
-        if capture_frames.counter < 300:
+        max_frames = duration * 30  # 30 FPS
+        if capture_frames.counter < max_frames:
             w2i.Modified()
             w2i.Update()
             vtk_image = w2i.GetOutput()
@@ -30,8 +36,12 @@ def SVasVideo(ren_win, video_button, interactor):
         else:
             writer.close()
             interactor.RemoveObserver(capture_frames._id)
-            video_button.SetInput("Record 10s")
-            video_button.GetTextProperty().SetColor(0, 1, 0)
+            for actor in record_actors:
+                actor.SetInput(actor.GetInput().replace("Recording", selected_record))
+                if actor.GetInput() == selected_record:
+                    actor.GetTextProperty().SetColor(0, 1, 0)
+                else:
+                    actor.GetTextProperty().SetColor(1, 1, 1)
             ren_win.Render()
 
     capture_frames.counter = 0
