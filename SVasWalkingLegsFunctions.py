@@ -166,17 +166,17 @@ def initialize_walking_legs(renderer):
 
     o2_bar = vtk.vtkScalarBarActor()
     o2_bar.SetLookupTable(lut_o2)
-    o2_bar.SetNumberOfLabels(4)
-    o2_bar.SetOrientationToVertical()
-    o2_bar.SetPosition(0.01, 0.08)
-    o2_bar.SetWidth(0.1)
-    o2_bar.SetHeight(0.8)
+    o2_bar.SetNumberOfLabels(3)
+    o2_bar.SetOrientationToHorizontal()
+    o2_bar.SetPosition(0.01, 0.02)
+    o2_bar.SetWidth(0.96)
+    o2_bar.SetHeight(0.04)
     o2_bar.Modified()
     renderer.AddActor2D(o2_bar)
 
     # Text actor
     text_actor = vtk.vtkTextActor()
-    text_actor.GetTextProperty().SetFontSize(18)
+    text_actor.GetTextProperty().SetFontSize(10)
     text_actor.GetTextProperty().SetColor(1, 1, 1)
     text_actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
     text_actor.SetPosition(0.80, 0.90)

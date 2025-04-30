@@ -80,8 +80,28 @@ def add_label(text, renderer, x, y):
 
 selected_field = "pressure"
 field_label = add_label(f"Selected: {selected_field.capitalize()}", renderers[1], 0.02, 0.94)
-add_label("Walking Legs", renderers[0], 0.02, 0.94)
 add_label("Pulse Curves", renderers[2], 0.02, 0.94)
+
+# === Menu for Roaming/Walking/Running ===
+menu_options = ["Roaming", "Walking", "Running"]
+menu_actors = []
+selected_mode = "Walking"  # Default mode
+frame_rates = {"Roaming": (100, 1), "Walking": (50, 1), "Running": (25, 2)}  # (timer_ms, frames_per_tick)
+
+for i, option in enumerate(menu_options):
+    actor = vtk.vtkTextActor()
+    actor.SetInput(option)
+    actor.GetTextProperty().SetFontSize(18)
+    actor.GetTextProperty().SetColor(1, 1, 1)  # White by default
+    actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
+    actor.SetPosition(0.02, 0.94 - i * 0.04)
+    renderers[0].AddActor2D(actor)
+    menu_actors.append(actor)
+
+# Set initial selected mode color
+for actor in menu_actors:
+    if actor.GetInput() == selected_mode:
+        actor.GetTextProperty().SetColor(0, 1, 0)  # Green for selected
 
 # === Animation State ===
 actors = [vtk.vtkActor() for _ in fields]
@@ -95,7 +115,7 @@ def start_video_recording():
 
 video_button = vtk.vtkTextActor()
 video_button.SetInput("Record 10s")
-video_button.GetTextProperty().SetFontSize(24)  # Increased for visibility
+video_button.GetTextProperty().SetFontSize(24)
 video_button.GetTextProperty().SetColor(0, 1, 0)
 video_button.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
 video_button.SetPosition(0.02, 0.05)
@@ -104,20 +124,54 @@ renderers[4].AddActor2D(video_button)
 def video_button_callback(obj, event):
     if event == "LeftButtonPressEvent":
         x, y = interactor.GetEventPosition()
-        # Convert to normalized viewport coordinates for renderers[4]
         width, height = ren_win.GetSize()
         nx = x / width
         ny = y / height
-        # Check if click is in renderers[4] (0.0, 0.0, 1.0, 0.2) and near (0.02, 0.05)
         if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 0.2:
             if abs(nx - 0.02) < 0.1 and abs(ny - 0.05) < 0.05:
                 start_video_recording()
+
+# === Menu Interaction ===
+def menu_interaction_callback(obj, event):
+    global selected_mode
+    x, y = interactor.GetEventPosition()
+    width, height = ren_win.GetSize()
+    nx = x / width
+    ny = y / height
+    # Check if in renderers[0] viewport (0.0, 0.2, 0.333, 1.0)
+    if 0.0 <= nx <= 0.333 and 0.2 <= ny <= 1.0:
+        # Map ny to renderer[0]'s normalized coordinates (0.2 to 1.0 -> 0.0 to 1.0)
+        ny_remapped = (ny - 0.2) / 0.8
+        hovered = None
+        for i, actor in enumerate(menu_actors):
+            y_pos = 0.94 - i * 0.04
+            if abs(ny_remapped - y_pos) < 0.02:
+                hovered = actor.GetInput()
+                if event == "LeftButtonPressEvent":
+                    selected_mode = hovered
+            # Update colors
+            if actor.GetInput() == selected_mode:
+                actor.GetTextProperty().SetColor(0, 1, 0)  # Green for selected
+            elif actor.GetInput() == hovered:
+                actor.GetTextProperty().SetColor(0, 0, 1)  # Blue for hover
+            else:
+                actor.GetTextProperty().SetColor(1, 1, 1)  # White otherwise
+    else:
+        # Reset to white except for selected
+        for actor in menu_actors:
+            if actor.GetInput() == selected_mode:
+                actor.GetTextProperty().SetColor(0, 1, 0)
+            else:
+                actor.GetTextProperty().SetColor(1, 1, 1)
+    ren_win.Render()
 
 # === Interactor and Individual Cameras ===
 interactor = vtk.vtkRenderWindowInteractor()
 interactor.SetRenderWindow(ren_win)
 interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
 interactor.AddObserver("LeftButtonPressEvent", video_button_callback)
+interactor.AddObserver("LeftButtonPressEvent", menu_interaction_callback)
+interactor.AddObserver("MouseMoveEvent", menu_interaction_callback)
 for ren in renderers:
     ren.SetActiveCamera(vtk.vtkCamera())
 
@@ -234,9 +288,10 @@ def on_keypress(obj, event):
 
 def timer_callback(obj, event):
     global step, walking_step
+    timer_ms, frames_per_tick = frame_rates[selected_mode]
     if is_animating:
-        step = (step + 1) % num_timesteps
-        walking_step = (walking_step + 1) % walking_num_timesteps
+        step = (step + frames_per_tick) % num_timesteps
+        walking_step = (walking_step + frames_per_tick) % walking_num_timesteps
     else:
         step = int(slider_time.GetValue())
         walking_step = int(slider_walking_time.GetValue())
@@ -245,6 +300,9 @@ def timer_callback(obj, event):
     load_frame(step)
     update_walking_legs(walking_legs_state, walking_step)
     ren_win.Render()
+    # Update timer interval
+    interactor.DestroyTimer()
+    interactor.CreateRepeatingTimer(timer_ms)
 
 for idx in range(len(renderers)):
     renderers[idx].ResetCamera()
@@ -255,5 +313,6 @@ ren_win.Render()
 widget_timer.EnabledOn()
 widget_point.EnabledOn()
 widget_walking_timer.EnabledOn()
-interactor.CreateRepeatingTimer(10)
+interactor.CreateRepeatingTimer(frame_rates[selected_mode][0])
 interactor.Start()
+
