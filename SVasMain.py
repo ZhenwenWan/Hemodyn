@@ -4,15 +4,15 @@ import importlib
 import SVasTimeArr
 importlib.reload(SVasTimeArr)
 from SVasTimeArr import SVas_TimeArr
+import SVasVideo
+importlib.reload(SVasVideo)
+from SVasVideo import SVasVideo
 import SVasWalkingLegsFunctions
 importlib.reload(SVasWalkingLegsFunctions)
 from SVasWalkingLegsFunctions import initialize_walking_legs, update_walking_legs
 import SVasSliderUtils
 importlib.reload(SVasSliderUtils)
 from SVasSliderUtils import create_slider_widget
-import SVasToggleButton
-importlib.reload(SVasToggleButton)
-from SVasToggleButton import ToggleButton
 
 # === Load VTP File ===
 single_file = "12_AortoFem_Pulse_R_output_verified.vtp"
@@ -21,25 +21,38 @@ data_list, polydata, field_time_map = SVas_TimeArr(single_file)
 fields = sorted(set(field_time_map.keys()))
 time_tags = sorted({k for v in field_time_map.values() for k in v})
 num_timesteps = len(time_tags)
-walking_num_timesteps = 50  # Walking legs cycle has 50 frames
+walking_num_timesteps = 50
 
 print(f"Loaded {len(data_list)} frames.")
 
-# === Render Window and 6-Renderer Grid Layout ===
+# === Render Window and 5-Renderer Layout ===
 ren_win = vtk.vtkRenderWindow()
 ren_win.SetSize(1200, 800)
 renderers = []
 for i in range(2):
     for j in range(3):
+        if i == 1 and j == 2:
+            continue
         ren = vtk.vtkRenderer()
-        ren.SetViewport(j / 3.0, 1 - (i + 1) / 2.5, (j + 1) / 3.0, 1 - i / 2.5)
+        if i == 0 and j == 0:  # renderers[0]: Walking Legs
+            ren.SetViewport(0.0, 0.2, 0.333, 1.0)
+        elif i == 0 and j == 1:  # renderers[1]: Selected Field
+            ren.SetViewport(0.333, 0.2, 0.667, 1.0)
+        elif i == 0 and j == 2:  # renderers[2]: Pulse Curves
+            ren.SetViewport(0.667, 0.6, 1.0, 1.0)
+        elif i == 1 and j == 0:  # renderers[3]: Empty
+            ren.SetViewport(0.667, 0.2, 1.0, 0.6)
+        elif i == 1 and j == 1:  # renderers[4]: Controller
+            ren.SetViewport(0.0, 0.0, 1.0, 0.2)
         shade = 0.45 + 0.05 * (i * 3 + j) / 5.0
         ren.SetBackground(shade, shade, shade)
         ren_win.AddRenderer(ren)
         renderers.append(ren)
 
-# === Initialize Walking Legs in Renderer 4 ===
-walking_legs_state = initialize_walking_legs(renderers[4])
+renderers[4].SetBackground(0.4, 0.4, 0.4)
+
+# === Initialize Walking Legs in Renderer 0 ===
+walking_legs_state = initialize_walking_legs(renderers[0])
 
 # === Curve Data Initialization ===
 curve_fields = ["pressure", "flow", "wss"]
@@ -63,61 +76,59 @@ def add_label(text, renderer, x, y):
     label.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
     label.SetPosition(x, y)
     renderer.AddActor2D(label)
+    return label
 
-add_label("Pressure", renderers[0], 0.02, 0.9)
-add_label("Flow", renderers[1], 0.02, 0.9)
-add_label("WSS", renderers[2], 0.02, 0.9)
-add_label("Pulse Curves", renderers[3], 0.02, 0.9)
-add_label("Walking Legs", renderers[4], 0.02, 0.9)
+selected_field = "pressure"
+field_label = add_label(f"Selected: {selected_field.capitalize()}", renderers[1], 0.02, 0.94)
+add_label("Walking Legs", renderers[0], 0.02, 0.94)
+add_label("Pulse Curves", renderers[2], 0.02, 0.94)
 
 # === Animation State ===
 actors = [vtk.vtkActor() for _ in fields]
 step = 0
-walking_step = 0  # Separate step for walking legs
+walking_step = 0
 is_animating = False
-
-import SVasVideo
-importlib.reload(SVasVideo)
-from SVasVideo import SVasVideo
 
 # === Video Recording Setup ===
 def start_video_recording():
     SVasVideo(ren_win, video_button, interactor)
 
-controller_renderer = vtk.vtkRenderer()
-controller_renderer.SetViewport(0.0, 0.0, 1.0, 0.2)
-controller_renderer.SetBackground(0.4, 0.4, 0.4)
-ren_win.AddRenderer(controller_renderer)
-
 video_button = vtk.vtkTextActor()
 video_button.SetInput("Record 10s")
-video_button.GetTextProperty().SetFontSize(18)
+video_button.GetTextProperty().SetFontSize(24)  # Increased for visibility
 video_button.GetTextProperty().SetColor(0, 1, 0)
 video_button.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
 video_button.SetPosition(0.02, 0.05)
-controller_renderer.AddActor2D(video_button)
+renderers[4].AddActor2D(video_button)
 
-# === Interactor and Shared Camera ===
+def video_button_callback(obj, event):
+    if event == "LeftButtonPressEvent":
+        x, y = interactor.GetEventPosition()
+        # Convert to normalized viewport coordinates for renderers[4]
+        width, height = ren_win.GetSize()
+        nx = x / width
+        ny = y / height
+        # Check if click is in renderers[4] (0.0, 0.0, 1.0, 0.2) and near (0.02, 0.05)
+        if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 0.2:
+            if abs(nx - 0.02) < 0.1 and abs(ny - 0.05) < 0.05:
+                start_video_recording()
+
+# === Interactor and Individual Cameras ===
 interactor = vtk.vtkRenderWindowInteractor()
 interactor.SetRenderWindow(ren_win)
 interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
-shared_camera = vtk.vtkCamera()
-for ren in renderers[:3]:
-    ren.SetActiveCamera(shared_camera)
-
-# Set individual cameras for curve and walking legs renderers
-for i in range(3, 5):
-    renderers[i].SetActiveCamera(vtk.vtkCamera())
+interactor.AddObserver("LeftButtonPressEvent", video_button_callback)
+for ren in renderers:
+    ren.SetActiveCamera(vtk.vtkCamera())
 
 # === Slider Widgets ===
-# Create sliders using the utility function
 slider_point, widget_point = create_slider_widget(
     interactor=interactor,
     title="Point",
     min_value=0,
     max_value=len(data_list) - 1,
-    x1_pos=0.01,
-    x2_pos=0.31,
+    x1_pos=0.68,
+    x2_pos=0.98,
     y_pos=0.125,
     slider_color=(0.1, 0.8, 0.1)
 )
@@ -138,8 +149,8 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
     title="Walking Frame /50",
     min_value=0,
     max_value=walking_num_timesteps - 1,
-    x1_pos=0.68,
-    x2_pos=0.98,
+    x1_pos=0.01,
+    x2_pos=0.31,
     y_pos=0.125,
     slider_color=(0.8, 0.3, 0.3)
 )
@@ -160,11 +171,13 @@ def load_frame(idx):
 
     field_to_index = {"pressure": 0, "flow": 1, "wss": 2}
 
-    for field in ["pressure", "flow", "wss"]:
-        arr = arrays.get(field)
-        if arr is None or area_array is None:
-            continue
+    for actor in renderers[1].GetActors():
+        if actor != field_label:
+            renderers[1].RemoveActor(actor)
 
+    field = selected_field
+    arr = arrays.get(field)
+    if arr is not None and area_array is not None:
         pdata = vtk.vtkPolyData()
         pdata.SetPoints(polydata.GetPoints())
         pdata.SetLines(polydata.GetLines())
@@ -189,22 +202,35 @@ def load_frame(idx):
 
         index = field_to_index[field]
         actors[index].SetMapper(mapper)
-        if actors[index] not in renderers[index].GetActors():
-            renderers[index].AddActor(actors[index])
+        renderers[1].AddActor(actors[index])
+
+    renderers[3].RemoveAllViewProps()
 
     ipoint = int(slider_point.GetValue())
     if is_animating:
-        update_curves(idx, curve_values[ipoint], [renderers[3]])
+        update_curves(idx, curve_values[ipoint], [renderers[2]])
     else:
-        display_curves(curve_values[ipoint], [renderers[3]])
+        display_curves(curve_values[ipoint], [renderers[2]])
 
     ren_win.Render()
 
-# === Animation Loop ===
+# === Field Selection and Animation Loop ===
 def on_keypress(obj, event):
-    global is_animating
-    if obj.GetKeySym() == 'a':
+    global is_animating, selected_field
+    key = obj.GetKeySym()
+    if key == 'a':
         is_animating = not is_animating
+    elif key == 'p':
+        selected_field = "pressure"
+        field_label.SetInput("Selected: Pressure")
+    elif key == 'f':
+        selected_field = "flow"
+        field_label.SetInput("Selected: Flow")
+    elif key == 'w':
+        selected_field = "wss"
+        field_label.SetInput("Selected: WSS")
+    load_frame(step)
+    ren_win.Render()
 
 def timer_callback(obj, event):
     global step, walking_step
@@ -229,4 +255,3 @@ widget_point.EnabledOn()
 widget_walking_timer.EnabledOn()
 interactor.CreateRepeatingTimer(10)
 interactor.Start()
-
