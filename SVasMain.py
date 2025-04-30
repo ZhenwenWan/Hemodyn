@@ -13,6 +13,9 @@ from SVasWalkingLegsFunctions import initialize_walking_legs, update_walking_leg
 import SVasSliderUtils
 importlib.reload(SVasSliderUtils)
 from SVasSliderUtils import create_slider_widget
+import SVasFieldVisualization
+importlib.reload(SVasFieldVisualization)
+from SVasFieldVisualization import initialize_field_visualization, update_field_visualization
 
 # === Load VTP File ===
 single_file = "12_AortoFem_Pulse_R_output_verified.vtp"
@@ -54,6 +57,9 @@ renderers[4].SetBackground(0.4, 0.4, 0.4)
 # === Initialize Walking Legs in Renderer 0 ===
 walking_legs_state = initialize_walking_legs(renderers[0])
 
+# === Initialize Field Visualization in Renderer 1 ===
+field_vis_state = initialize_field_visualization(renderers[1], fields)
+
 # === Curve Data Initialization ===
 curve_fields = ["pressure", "flow", "wss"]
 curve_values = []
@@ -78,33 +84,48 @@ def add_label(text, renderer, x, y):
     renderer.AddActor2D(label)
     return label
 
-selected_field = "pressure"
-field_label = add_label(f"Selected: {selected_field.capitalize()}", renderers[1], 0.02, 0.94)
 add_label("Pulse Curves", renderers[2], 0.02, 0.94)
 
-# === Menu for Roaming/Walking/Running ===
+# === Menu for Roaming/Walking/Running in renderers[0] ===
 menu_options = ["Roaming", "Walking", "Running"]
 menu_actors = []
-selected_mode = "Walking"  # Default mode
-frame_rates = {"Roaming": (100, 1), "Walking": (50, 1), "Running": (25, 2)}  # (timer_ms, frames_per_tick)
+selected_mode = "Walking"
+frame_rates = {"Roaming": (100, 1), "Walking": (50, 1), "Running": (25, 2)}
 
 for i, option in enumerate(menu_options):
     actor = vtk.vtkTextActor()
     actor.SetInput(option)
     actor.GetTextProperty().SetFontSize(18)
-    actor.GetTextProperty().SetColor(1, 1, 1)  # White by default
+    actor.GetTextProperty().SetColor(1, 1, 1)
     actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
     actor.SetPosition(0.02, 0.94 - i * 0.04)
     renderers[0].AddActor2D(actor)
     menu_actors.append(actor)
 
-# Set initial selected mode color
 for actor in menu_actors:
     if actor.GetInput() == selected_mode:
-        actor.GetTextProperty().SetColor(0, 1, 0)  # Green for selected
+        actor.GetTextProperty().SetColor(0, 1, 0)
+
+# === Menu for Pressure/Flow/WSS in renderers[1] ===
+field_options = ["Pressure", "Flow", "WSS"]
+field_actors = []
+selected_field = "pressure"
+
+for i, option in enumerate(field_options):
+    actor = vtk.vtkTextActor()
+    actor.SetInput(option)
+    actor.GetTextProperty().SetFontSize(18)
+    actor.GetTextProperty().SetColor(1, 1, 1)
+    actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
+    actor.SetPosition(0.02, 0.94 - i * 0.04)
+    renderers[1].AddActor2D(actor)
+    field_actors.append(actor)
+
+for actor in field_actors:
+    if actor.GetInput().lower() == selected_field:
+        actor.GetTextProperty().SetColor(0, 1, 0)
 
 # === Animation State ===
-actors = [vtk.vtkActor() for _ in fields]
 step = 0
 walking_step = 0
 is_animating = False
@@ -133,14 +154,14 @@ def video_button_callback(obj, event):
 
 # === Menu Interaction ===
 def menu_interaction_callback(obj, event):
-    global selected_mode
+    global selected_mode, selected_field
     x, y = interactor.GetEventPosition()
     width, height = ren_win.GetSize()
     nx = x / width
     ny = y / height
-    # Check if in renderers[0] viewport (0.0, 0.2, 0.333, 1.0)
+
+    # renderers[0] menu (Roaming/Walking/Running)
     if 0.0 <= nx <= 0.333 and 0.2 <= ny <= 1.0:
-        # Map ny to renderer[0]'s normalized coordinates (0.2 to 1.0 -> 0.0 to 1.0)
         ny_remapped = (ny - 0.2) / 0.8
         hovered = None
         for i, actor in enumerate(menu_actors):
@@ -149,20 +170,44 @@ def menu_interaction_callback(obj, event):
                 hovered = actor.GetInput()
                 if event == "LeftButtonPressEvent":
                     selected_mode = hovered
-            # Update colors
             if actor.GetInput() == selected_mode:
-                actor.GetTextProperty().SetColor(0, 1, 0)  # Green for selected
+                actor.GetTextProperty().SetColor(0, 1, 0)
             elif actor.GetInput() == hovered:
-                actor.GetTextProperty().SetColor(0, 0, 1)  # Blue for hover
+                actor.GetTextProperty().SetColor(0, 0, 1)
             else:
-                actor.GetTextProperty().SetColor(1, 1, 1)  # White otherwise
+                actor.GetTextProperty().SetColor(1, 1, 1)
     else:
-        # Reset to white except for selected
         for actor in menu_actors:
             if actor.GetInput() == selected_mode:
                 actor.GetTextProperty().SetColor(0, 1, 0)
             else:
                 actor.GetTextProperty().SetColor(1, 1, 1)
+
+    # renderers[1] menu (Pressure/Flow/WSS)
+    if 0.333 <= nx <= 0.667 and 0.2 <= ny <= 1.0:
+        ny_remapped = (ny - 0.2) / 0.8
+        hovered = None
+        for i, actor in enumerate(field_actors):
+            y_pos = 0.94 - i * 0.04
+            if abs(ny_remapped - y_pos) < 0.02:
+                hovered = actor.GetInput()
+                if event == "LeftButtonPressEvent":
+                    selected_field = hovered.lower()
+            if actor.GetInput().lower() == selected_field:
+                actor.GetTextProperty().SetColor(0, 1, 0)
+            elif actor.GetInput() == hovered:
+                actor.GetTextProperty().SetColor(0, 0, 1)
+            else:
+                actor.GetTextProperty().SetColor(1, 1, 1)
+    else:
+        for actor in field_actors:
+            if actor.GetInput().lower() == selected_field:
+                actor.GetTextProperty().SetColor(0, 1, 0)
+            else:
+                actor.GetTextProperty().SetColor(1, 1, 1)
+
+    if event == "LeftButtonPressEvent":
+        load_frame(step)
     ren_win.Render()
 
 # === Interactor and Individual Cameras ===
@@ -216,47 +261,7 @@ from SVasCurves import display_curves, update_curves
 # === Frame Loader ===
 def load_frame(idx):
     t, arrays = data_list[idx % len(data_list)]
-    area_array = arrays.get("area")
-    radii = vtk.vtkDoubleArray()
-    radii.SetName("TubeRadius")
-    for j in range(area_array.GetNumberOfTuples()):
-        r = area_array.GetValue(j) ** 0.5 * 0.1
-        radii.InsertNextValue(r)
-
-    field_to_index = {"pressure": 0, "flow": 1, "wss": 2}
-
-    for actor in renderers[1].GetActors():
-        if actor != field_label:
-            renderers[1].RemoveActor(actor)
-
-    field = selected_field
-    arr = arrays.get(field)
-    if arr is not None and area_array is not None:
-        pdata = vtk.vtkPolyData()
-        pdata.SetPoints(polydata.GetPoints())
-        pdata.SetLines(polydata.GetLines())
-        pdata.GetPointData().AddArray(radii)
-        pdata.GetPointData().AddArray(arr)
-        pdata.GetPointData().SetActiveScalars(arr.GetName())
-        pdata.GetPointData().SetActiveScalars("TubeRadius")
-
-        tube_filter = vtk.vtkTubeFilter()
-        tube_filter.SetInputData(pdata)
-        tube_filter.SetVaryRadiusToVaryRadiusByAbsoluteScalar()
-        tube_filter.SetNumberOfSides(12)
-        tube_filter.Update()
-
-        mapper = vtk.vtkPolyDataMapper()
-        mapper.SetInputConnection(tube_filter.GetOutputPort())
-        mapper.SetScalarVisibility(True)
-        mapper.SetColorModeToMapScalars()
-        mapper.SetScalarModeToUsePointFieldData()
-        mapper.SelectColorArray(arr.GetName())
-        mapper.SetScalarRange(arr.GetRange())
-
-        index = field_to_index[field]
-        actors[index].SetMapper(mapper)
-        renderers[1].AddActor(actors[index])
+    update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx)
 
     renderers[3].RemoveAllViewProps()
 
@@ -270,19 +275,10 @@ def load_frame(idx):
 
 # === Field Selection and Animation Loop ===
 def on_keypress(obj, event):
-    global is_animating, selected_field
+    global is_animating
     key = obj.GetKeySym()
     if key == 'a':
         is_animating = not is_animating
-    elif key == 'p':
-        selected_field = "pressure"
-        field_label.SetInput("Selected: Pressure")
-    elif key == 'f':
-        selected_field = "flow"
-        field_label.SetInput("Selected: Flow")
-    elif key == 'w':
-        selected_field = "wss"
-        field_label.SetInput("Selected: WSS")
     load_frame(step)
     ren_win.Render()
 
@@ -300,7 +296,6 @@ def timer_callback(obj, event):
     load_frame(step)
     update_walking_legs(walking_legs_state, walking_step)
     ren_win.Render()
-    # Update timer interval
     interactor.DestroyTimer()
     interactor.CreateRepeatingTimer(timer_ms)
 
