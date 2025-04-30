@@ -27,7 +27,7 @@ print(f"Loaded {len(data_list)} frames.")
 
 # === Render Window and 6-Renderer Grid Layout ===
 ren_win = vtk.vtkRenderWindow()
-ren_win.SetSize(1800, 1200)
+ren_win.SetSize(1200, 800)
 renderers = []
 for i in range(2):
     for j in range(3):
@@ -68,7 +68,7 @@ add_label("Pressure", renderers[0], 0.02, 0.9)
 add_label("Flow", renderers[1], 0.02, 0.9)
 add_label("WSS", renderers[2], 0.02, 0.9)
 add_label("Pulse Curves", renderers[3], 0.02, 0.9)
-add_label("O2 Dynamics of Walking Legs", renderers[4], 0.02, 0.9)
+add_label("Walking Legs", renderers[4], 0.02, 0.9)
 
 # === Animation State ===
 actors = [vtk.vtkActor() for _ in fields]
@@ -94,7 +94,7 @@ video_button.SetInput("Record 10s")
 video_button.GetTextProperty().SetFontSize(18)
 video_button.GetTextProperty().SetColor(0, 1, 0)
 video_button.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-video_button.SetPosition(0.02, 0.85)
+video_button.SetPosition(0.02, 0.05)
 controller_renderer.AddActor2D(video_button)
 
 # === Interactor and Shared Camera ===
@@ -104,26 +104,6 @@ interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
 shared_camera = vtk.vtkCamera()
 for ren in renderers[:3]:
     ren.SetActiveCamera(shared_camera)
-
-# === Camera Toggle ===
-def toggle_camera_on(exec):
-    if exec:
-        for i in range(3):
-            ren = renderers[i]
-            ren.ResetCamera()
-        ren_win.Render()
-
-# === Camera Toggle Button ===
-camera_toggle_button = ToggleButton(
-    text="Camera",
-    x=0.02,
-    y=0.02,
-    radius=0.05,
-    renderer=renderers[0],
-    interactor=interactor,
-    font_size=24,  # Set a custom font size
-    exec_func=toggle_camera_on  # Pass the function to execute
-)
 
 # Set individual cameras for curve and walking legs renderers
 for i in range(3, 5):
@@ -138,7 +118,7 @@ slider_point, widget_point = create_slider_widget(
     max_value=len(data_list) - 1,
     x1_pos=0.01,
     x2_pos=0.31,
-    y_pos=0.15,
+    y_pos=0.125,
     slider_color=(0.1, 0.8, 0.1)
 )
 
@@ -149,7 +129,7 @@ slider_time, widget_timer = create_slider_widget(
     max_value=len(data_list) - 1,
     x1_pos=0.35,
     x2_pos=0.65,
-    y_pos=0.15,
+    y_pos=0.125,
     slider_color=(0.3, 0.3, 0.8)
 )
 
@@ -160,7 +140,7 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
     max_value=walking_num_timesteps - 1,
     x1_pos=0.68,
     x2_pos=0.98,
-    y_pos=0.15,
+    y_pos=0.125,
     slider_color=(0.8, 0.3, 0.3)
 )
 

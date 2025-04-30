@@ -436,7 +436,7 @@ def update_walking_legs(state, index):
     mapper2.Update()
     actor2.Modified()
 
-    text_actor.SetInput(f"Frame: {walking_index}")
+    #text_actor.SetInput(f"Frame: {walking_index}")
     if index==0:
         renderer.ResetCamera()
 
