@@ -1,0 +1,170 @@
+Header
+  Check Keywords Warn
+  Mesh DB "modelFrame03" "."
+End
+
+Constants
+  Gravity(4)=  0 -1 0 0
+End
+
+Simulation
+  Max Output Level = 5
+  Coordinate System = Cartesian
+  Coordinate Mapping(3) = 1 2 3
+  Coordinate Scaling = Real 0.01
+  Simulation Type  = Transient
+  Steady State Max Iterations = 10
+  Timestepping Method = BDF
+  BDF Order = 1
+! One could try to play around with also other 
+! time integration schemes. 
+!  Timestepping Method = Newmark	
+!  Newmark Beta = 0.5
+
+  Timestep Intervals = Integer 300
+  Output Intervals = Integer 1
+  Timestep Sizes = Real 0.01
+  Post File = "case.vtu"
+  Use Mesh Names = Logical True
+End
+
+Body 1
+  Name = String "Body01"
+  Equation = 1 
+  Material = 1
+  Body Force = 1
+  Initial Condition = 1
+End
+
+Solver 1
+  Equation = N-S
+  Exec Solver = "Always"
+  Procedure = "FlowSolve" "FlowSolver"
+  Variable = Flow Solution[Velocity:2 Pressure:1]
+
+  Stabilization Method = stabilized
+  Nonlinear System Max Iterations = 20
+  Nonlinear System Convergence Tolerance = 1.0e-6
+  Nonlinear System Newton After Iterations = 3
+  Nonlinear System Newton After Tolerance = 1.0e-4
+  Nonlinear System Relaxation Factor = 1.0
+  Linear System Solver = "Iterative"
+  Linear System Iterative Method = "BiCGStab"
+  Linear System Convergence Tolerance = 1.0e-8
+  Linear System Max Iterations = 1000
+  Linear System Residual Output = 20
+  Linear System Preconditioning = ILU0
+  Steady State Convergence Tolerance = 1.0e-5
+End
+
+Solver 2
+  Equation = String "Vascular"
+  Procedure = File "HeatSolve" "HeatSolver"
+  Stabilize = Logical True
+  Optimize Bandwidth = Logical True
+  Bubbles = Logical False
+  Exec Solver = String "Always"
+  Variable = String "O2Vas"
+  Linear System Abort Not Converged = Logical False
+  Linear System Convergence Tolerance = Real 1e-06
+  Linear System Iterative Method = String "BiCGStabl"
+  Linear System Max Iterations = Integer 100
+  Linear System Precondition Recompute = Integer 1
+  Linear System Preconditioning = String "vanka"
+  Linear System Residual Output = Integer 1
+  Linear System Solver = String "Iterative"
+  Nonlinear System Convergence Tolerance = Real 1e-05
+  Nonlinear System Max Iterations = Integer 4
+  Nonlinear System Newton After Iterations = Integer 2
+  Nonlinear System Newton After Tolerance = Real 1e-05
+  Nonlinear System Relaxation Factor = Real 0.75
+  BiCGStabl polynomial degree = Integer 2
+  Steady State Convergence Tolerance = Real 1e-06
+End
+
+Solver 3
+  Equation = String "Muscle"
+  Procedure = File "ModelPDE" "AdvDiffSolver"
+  Stabilize = Logical True
+  Optimize Bandwidth = Logical True
+  Bubbles = Logical False
+  Exec Solver = String "Always"
+  Variable = String "O2Mus"
+  Linear System Abort Not Converged = Logical False
+  Linear System Convergence Tolerance = Real 1e-06
+  Linear System Iterative Method = String "BiCGStabl"
+  Linear System Max Iterations = Integer 100
+  Linear System Precondition Recompute = Integer 1
+  Linear System Preconditioning = String "vanka"
+  Linear System Residual Output = Integer 1
+  Linear System Solver = String "Iterative"
+  Nonlinear System Convergence Tolerance = Real 1e-05
+  Nonlinear System Max Iterations = Integer 4
+  Nonlinear System Newton After Iterations = Integer 2
+  Nonlinear System Newton After Tolerance = Real 1e-05
+  Nonlinear System Relaxation Factor = Real 0.75
+  BiCGStabl polynomial degree = Integer 2
+  Steady State Convergence Tolerance = Real 1e-06
+End
+
+Equation 1
+  Name = "Flow and O2Vas"
+  Active Solvers(3) = 1 2 3
+  Convection = Computed
+  NS Convect = Logical False
+End
+
+Body Force 1 
+  Heat Source  = Real -1.0
+  field source = Real -1.0
+End 
+
+Initial Condition 1
+  Velocity 1 = 0.1e-2 
+  Velocity 2 = 0
+  Pressure = 0
+  O2Vas = REAL 60.0
+  O2Mus = REAL 50.0
+End
+
+Material 1
+  Heat Conductivity = 1
+  Heat Capacity = 1
+  Viscosity = 1.0
+  Density = 1000.0
+  diffusion coefficient = Real 1.0
+  time derivative coefficient = 100.0
+End
+
+Boundary Condition 1    
+  Name = "BC01"  
+  Velocity 1 = Variable time
+  Real MATC "t=tx(0)*pi; 1.0*abs(cos(t))"  
+  Velocity 2 = 0
+  Pressure = 0
+  O2Vas = Variable time
+  Real MATC "t=tx(0);60.0*(1+0.05*cos(2*pi*t/100))"  
+  field flux = Variable O2Vas, O2Mus
+  Real MATC "Oo=tx(0);Oi=tx(1);d=Oo-Oi;if(d>0) {1.0e-2*d} else {0}"  
+End
+
+Boundary Condition 2    
+  Name = "BC02"  
+  Velocity 1 = Variable time
+  Real MATC "t=tx(0)*pi; 1.0*abs(cos(t-0.25*pi))"  
+  Velocity 2 = 0
+  Pressure = 0
+  field flux = Variable O2Vas, O2Mus
+  Real MATC "Oo=tx(0);Oi=tx(1);d=Oo-Oi;if(d>0) {1.0e-2*d} else {0}"  
+End
+
+Boundary Condition 3    
+  Name = "BC03"  
+  Noslip wall BC = True
+  Heat Flux = 0
+  field flux = Variable O2Vas, O2Mus
+  Real MATC "Oo=tx(0);Oi=tx(1);d=Oo-Oi;if(d>0) {1.0e-2*d} else {0}"  
+End
+
+
+
