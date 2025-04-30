@@ -1,6 +1,6 @@
 import vtk
 
-def create_slider_widget(interactor, title, min_value, max_value, y_position, slider_color):
+def create_slider_widget(interactor, title, min_value, max_value, x1_pos, x2_pos, y_pos, slider_color):
     """
     Create a VTK slider representation and widget.
     
@@ -21,9 +21,9 @@ def create_slider_widget(interactor, title, min_value, max_value, y_position, sl
     slider.SetValue(min_value)
     slider.SetTitleText(title)
     slider.GetPoint1Coordinate().SetCoordinateSystemToNormalizedDisplay()
-    slider.GetPoint1Coordinate().SetValue(0.15, y_position)
+    slider.GetPoint1Coordinate().SetValue(x1_pos, y_pos)
     slider.GetPoint2Coordinate().SetCoordinateSystemToNormalizedDisplay()
-    slider.GetPoint2Coordinate().SetValue(0.85, y_position)
+    slider.GetPoint2Coordinate().SetValue(x2_pos, y_pos)
     slider.SetSliderLength(0.03)
     slider.SetSliderWidth(0.05)
     slider.SetEndCapLength(0.02)
