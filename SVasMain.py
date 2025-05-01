@@ -16,51 +16,58 @@ from SVasSliderUtils import create_slider_widget
 import SVasFieldVisualization
 importlib.reload(SVasFieldVisualization)
 from SVasFieldVisualization import initialize_field_visualization, update_field_visualization
+import SVasCurves
+importlib.reload(SVasCurves)
+from SVasCurves import display_curves, update_curves
+import SVasMenuUtils
+importlib.reload(SVasMenuUtils)
+from SVasMenuUtils import create_menu, handle_menu_interaction
 
-# === Load VTP File ===
-single_file = "12_AortoFem_Pulse_R_output_verified.vtp"
-data_list, polydata, field_time_map = SVas_TimeArr(single_file)
+# === Configuration ===
+VTK_FILE = "12_AortoFem_Pulse_R_output_verified.vtp"
+WINDOW_SIZE = (1200, 800)
+WALKING_NUM_TIMESTEPS = 50
+FRAME_RATES = {
+    "Roaming": (100, 1),
+    "Walking": (50, 1),
+    "Running": (25, 2)
+}
 
+# === Load VTP Data ===
+data_list, polydata, field_time_map = SVas_TimeArr(VTK_FILE)
 fields = sorted(set(field_time_map.keys()))
 time_tags = sorted({k for v in field_time_map.values() for k in v})
 num_timesteps = len(time_tags)
-walking_num_timesteps = 50
-
 print(f"Loaded {len(data_list)} frames.")
 
-# === Render Window and 5-Renderer Layout ===
+# === Initialize Render Window and Renderers ===
 ren_win = vtk.vtkRenderWindow()
-ren_win.SetSize(1200, 800)
+ren_win.SetSize(*WINDOW_SIZE)
+
 renderers = []
-for i in range(2):
-    for j in range(3):
-        if i == 1 and j == 2:
-            continue
-        ren = vtk.vtkRenderer()
-        if i == 0 and j == 0:  # renderers[0]: Walking Legs
-            ren.SetViewport(0.0, 0.2, 0.333, 1.0)
-        elif i == 0 and j == 1:  # renderers[1]: Selected Field
-            ren.SetViewport(0.333, 0.2, 0.667, 1.0)
-        elif i == 0 and j == 2:  # renderers[2]: Pulse Curves
-            ren.SetViewport(0.667, 0.6, 1.0, 1.0)
-        elif i == 1 and j == 0:  # renderers[3]: Empty
-            ren.SetViewport(0.667, 0.2, 1.0, 0.6)
-        elif i == 1 and j == 1:  # renderers[4]: Controller
-            ren.SetViewport(0.0, 0.0, 1.0, 0.2)
-        shade = 0.45 + 0.05 * (i * 3 + j) / 5.0
-        ren.SetBackground(shade, shade, shade)
-        ren_win.AddRenderer(ren)
-        renderers.append(ren)
+viewport_configs = [
+    (0.0, 0.2, 0.333, 1.0),  # Renderer 0: Walking Legs
+    (0.333, 0.2, 0.667, 1.0),  # Renderer 1: Selected Field
+    (0.667, 0.6, 1.0, 1.0),  # Renderer 2: Pulse Curves
+    (0.667, 0.2, 1.0, 0.6),  # Renderer 3: Empty
+    (0.0, 0.0, 1.0, 0.2)  # Renderer 4: Controller
+]
+
+for idx, viewport in enumerate(viewport_configs):
+    ren = vtk.vtkRenderer()
+    ren.SetViewport(viewport)
+    shade = 0.45 + 0.05 * idx / 5.0
+    ren.SetBackground(shade, shade, shade)
+    ren_win.AddRenderer(ren)
+    renderers.append(ren)
 
 renderers[4].SetBackground(0.4, 0.4, 0.4)
 
-# === Initialize Walking Legs in Renderer 0 ===
+# === Initialize Visualizations ===
 walking_legs_state = initialize_walking_legs(renderers[0])
-
-# === Initialize Field Visualization in Renderer 1 ===
 field_vis_state = initialize_field_visualization(renderers[1], fields)
 
-# === Curve Data Initialization ===
+# === Initialize Curve Data ===
 curve_fields = ["pressure", "flow", "wss"]
 curve_values = []
 for k in range(len(data_list)):
@@ -73,7 +80,7 @@ for k in range(len(data_list)):
             entry[field].append((i, y))
     curve_values.append(entry)
 
-# === Labels for Renderers ===
+# === Add Labels ===
 def add_label(text, renderer, x, y):
     label = vtk.vtkTextActor()
     label.SetInput(text)
@@ -86,158 +93,79 @@ def add_label(text, renderer, x, y):
 
 add_label("Pulse Curves", renderers[2], 0.02, 0.94)
 
-# === Menu for Roaming/Walking/Running in renderers[0] ===
-menu_options = ["Roaming", "Walking", "Running"]
-menu_actors = []
-selected_mode = "Walking"
-frame_rates = {"Roaming": (100, 1), "Walking": (50, 1), "Running": (25, 2)}
+# === Setup Menus ===
+menu_configs = [
+    {
+        "renderer": renderers[0],
+        "options": ["Roaming", "Walking", "Running"],
+        "default": "Walking",
+        "position": (0.02, 0.94, 0.04)
+    },
+    {
+        "renderer": renderers[1],
+        "options": ["Pressure", "Flow", "WSS"],
+        "default": "pressure",
+        "position": (0.02, 0.94, 0.04)
+    },
+    {
+        "renderer": renderers[4],
+        "options": ["Record 10s", "Record 30s"],
+        "default": None,
+        "position": (0.02, 0.18, 0.12)
+    }
+]
 
-for i, option in enumerate(menu_options):
-    actor = vtk.vtkTextActor()
-    actor.SetInput(option)
-    actor.GetTextProperty().SetFontSize(18)
-    actor.GetTextProperty().SetColor(1, 1, 1)
-    actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-    actor.SetPosition(0.02, 0.94 - i * 0.04)
-    renderers[0].AddActor2D(actor)
-    menu_actors.append(actor)
+menu_actors_dict = {}
+selected_options = {}
+for config in menu_configs:
+    actors, selected = create_menu(
+        config["renderer"],
+        config["options"],
+        config["default"],
+        config["position"]
+    )
+    menu_actors_dict[config["renderer"]] = actors
+    selected_options[config["renderer"]] = selected
 
-for actor in menu_actors:
-    if actor.GetInput() == selected_mode:
-        actor.GetTextProperty().SetColor(0, 1, 0)
-
-# === Menu for Pressure/Flow/WSS in renderers[1] ===
-field_options = ["Pressure", "Flow", "WSS"]
-field_actors = []
-selected_field = "pressure"
-
-for i, option in enumerate(field_options):
-    actor = vtk.vtkTextActor()
-    actor.SetInput(option)
-    actor.GetTextProperty().SetFontSize(18)
-    actor.GetTextProperty().SetColor(1, 1, 1)
-    actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-    actor.SetPosition(0.02, 0.94 - i * 0.04)
-    renderers[1].AddActor2D(actor)
-    field_actors.append(actor)
-
-for actor in field_actors:
-    if actor.GetInput().lower() == selected_field:
-        actor.GetTextProperty().SetColor(0, 1, 0)
-
-# === Menu for Record 10s/30s in renderers[4] ===
-record_options = ["Record 10s", "Record 30s"]
-record_actors = []
-selected_record = None  # No default selection
-
-for i, option in enumerate(record_options):
-    actor = vtk.vtkTextActor()
-    actor.SetInput(option)
-    actor.GetTextProperty().SetFontSize(18)
-    actor.GetTextProperty().SetColor(1, 1, 1)
-    actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
-    actor.SetPosition(0.02, 0.18 - i * 0.12)
-    renderers[4].AddActor2D(actor)
-    record_actors.append(actor)
+selected_mode = selected_options[renderers[0]]
+selected_field = selected_options[renderers[1]]
+selected_record = selected_options[renderers[4]]
 
 # === Animation State ===
 step = 0
 walking_step = 0
 is_animating = False
 
-# === Video Recording Setup ===
+# === Video Recording ===
 def start_video_recording():
     duration = 30 if selected_record == "Record 30s" else 10
-    SVasVideo(ren_win, record_actors, selected_record, interactor, duration)
+    SVasVideo(ren_win, menu_actors_dict[renderers[4]], selected_record, interactor, duration)
 
-# === Menu Interaction ===
-def menu_interaction_callback(obj, event):
-    global selected_mode, selected_field, selected_record
-    x, y = interactor.GetEventPosition()
-    width, height = ren_win.GetSize()
-    nx = x / width
-    ny = y / height
-
-    # renderers[0] menu (Roaming/Walking/Running)
-    if 0.0 <= nx <= 0.333 and 0.2 <= ny <= 1.0:
-        ny_remapped = (ny - 0.2) / 0.8
-        hovered = None
-        for i, actor in enumerate(menu_actors):
-            y_pos = 0.94 - i * 0.04
-            if abs(ny_remapped - y_pos) < 0.02:
-                hovered = actor.GetInput()
-                if event == "LeftButtonPressEvent":
-                    selected_mode = hovered
-            if actor.GetInput() == selected_mode:
-                actor.GetTextProperty().SetColor(0, 1, 0)
-            elif actor.GetInput() == hovered:
-                actor.GetTextProperty().SetColor(0, 0, 1)
-            else:
-                actor.GetTextProperty().SetColor(1, 1, 1)
-    else:
-        for actor in menu_actors:
-            if actor.GetInput() == selected_mode:
-                actor.GetTextProperty().SetColor(0, 1, 0)
-            else:
-                actor.GetTextProperty().SetColor(1, 1, 1)
-
-    # renderers[1] menu (Pressure/Flow/WSS)
-    if 0.333 <= nx <= 0.667 and 0.2 <= ny <= 1.0:
-        ny_remapped = (ny - 0.2) / 0.8
-        hovered = None
-        for i, actor in enumerate(field_actors):
-            y_pos = 0.94 - i * 0.04
-            if abs(ny_remapped - y_pos) < 0.02:
-                hovered = actor.GetInput()
-                if event == "LeftButtonPressEvent":
-                    selected_field = hovered.lower()
-            if actor.GetInput().lower() == selected_field:
-                actor.GetTextProperty().SetColor(0, 1, 0)
-            elif actor.GetInput() == hovered:
-                actor.GetTextProperty().SetColor(0, 0, 1)
-            else:
-                actor.GetTextProperty().SetColor(1, 1, 1)
-    else:
-        for actor in field_actors:
-            if actor.GetInput().lower() == selected_field:
-                actor.GetTextProperty().SetColor(0, 1, 0)
-            else:
-                actor.GetTextProperty().SetColor(1, 1, 1)
-
-    # renderers[4] menu (Record 10s/30s)
-    if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 0.2:
-        ny_remapped = ny / 0.2
-        hovered = None
-        for i, actor in enumerate(record_actors):
-            y_pos = 0.15 - i * 0.04
-            if abs(ny_remapped - y_pos) < 0.02:
-                hovered = actor.GetInput()
-                if event == "LeftButtonPressEvent":
-                    selected_record = hovered
-                    start_video_recording()
-            if actor.GetInput() == selected_record:
-                actor.GetTextProperty().SetColor(0, 1, 0)
-            elif actor.GetInput() == hovered:
-                actor.GetTextProperty().SetColor(0, 0, 1)
-            else:
-                actor.GetTextProperty().SetColor(1, 1, 1)
-    else:
-        for actor in record_actors:
-            if actor.GetInput() == selected_record:
-                actor.GetTextProperty().SetColor(0, 1, 0)
-            else:
-                actor.GetTextProperty().SetColor(1, 1, 1)
-
-    if event == "LeftButtonPressEvent" and (0.333 <= nx <= 0.667 and 0.2 <= ny <= 1.0):
-        load_frame(step)
-    ren_win.Render()
-
-# === Interactor and Individual Cameras ===
+# === Interactor Setup ===
 interactor = vtk.vtkRenderWindowInteractor()
 interactor.SetRenderWindow(ren_win)
 interactor.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
+
+def menu_interaction_callback(obj, event):
+    global selected_mode, selected_field, selected_record
+    selected_options[renderers[0]] = selected_mode
+    selected_options[renderers[1]] = selected_field
+    selected_options[renderers[4]] = selected_record
+    new_selections = handle_menu_interaction(
+        obj, event, ren_win, interactor, menu_configs, menu_actors_dict, selected_options
+    )
+    selected_mode = new_selections[renderers[0]]
+    selected_field = new_selections[renderers[1]]
+    selected_record = new_selections[renderers[4]]
+    if event == "LeftButtonPressEvent" and selected_record:
+        start_video_recording()
+    if event == "LeftButtonPressEvent" and (0.333 <= obj.GetEventPosition()[0] / ren_win.GetSize()[0] <= 0.667):
+        load_frame(step)
+    ren_win.Render()
+
 interactor.AddObserver("LeftButtonPressEvent", menu_interaction_callback)
 interactor.AddObserver("MouseMoveEvent", menu_interaction_callback)
+
 for ren in renderers:
     ren.SetActiveCamera(vtk.vtkCamera())
 
@@ -268,47 +196,39 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
     interactor=interactor,
     title="Walking Frame /50",
     min_value=0,
-    max_value=walking_num_timesteps - 1,
+    max_value=WALKING_NUM_TIMESTEPS - 1,
     x1_pos=0.01,
     x2_pos=0.31,
     y_pos=0.125,
     slider_color=(0.8, 0.3, 0.3)
 )
 
-import SVasCurves
-importlib.reload(SVasCurves)
-from SVasCurves import display_curves, update_curves
-
 # === Frame Loader ===
 def load_frame(idx):
     t, arrays = data_list[idx % len(data_list)]
     update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx)
-
     renderers[3].RemoveAllViewProps()
-
     ipoint = int(slider_point.GetValue())
     if is_animating:
         update_curves(idx, curve_values[ipoint], [renderers[2]])
     else:
         display_curves(curve_values[ipoint], [renderers[2]])
-
     ren_win.Render()
 
-# === Field Selection and Animation Loop ===
+# === Animation Control ===
 def on_keypress(obj, event):
     global is_animating
-    key = obj.GetKeySym()
-    if key == 'a':
+    if obj.GetKeySym() == 'a':
         is_animating = not is_animating
     load_frame(step)
     ren_win.Render()
 
 def timer_callback(obj, event):
     global step, walking_step
-    timer_ms, frames_per_tick = frame_rates[selected_mode]
+    timer_ms, frames_per_tick = FRAME_RATES[selected_mode]
     if is_animating:
         step = (step + frames_per_tick) % num_timesteps
-        walking_step = (walking_step + frames_per_tick) % walking_num_timesteps
+        walking_step = (walking_step + frames_per_tick) % WALKING_NUM_TIMESTEPS
     else:
         step = int(slider_time.GetValue())
         walking_step = int(slider_walking_time.GetValue())
@@ -320,15 +240,18 @@ def timer_callback(obj, event):
     interactor.DestroyTimer()
     interactor.CreateRepeatingTimer(timer_ms)
 
-for idx in range(len(renderers)):
-    renderers[idx].ResetCamera()
+# === Initialize and Start ===
+for renderer in renderers:
+    renderer.ResetCamera()
+
 interactor.AddObserver("KeyPressEvent", on_keypress)
 interactor.AddObserver("TimerEvent", timer_callback)
 interactor.Initialize()
 ren_win.Render()
+
 widget_timer.EnabledOn()
 widget_point.EnabledOn()
 widget_walking_timer.EnabledOn()
-interactor.CreateRepeatingTimer(frame_rates[selected_mode][0])
+interactor.CreateRepeatingTimer(FRAME_RATES[selected_mode][0])
 interactor.Start()
 
