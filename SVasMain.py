@@ -40,7 +40,7 @@ time_tags = sorted({k for v in field_time_map.values() for k in v})
 num_timesteps = len(time_tags)
 print(f"Loaded {len(data_list)} frames.")
 
-# Get max value for slider_point from first frame's area array
+# Get max value for point sliders from first frame's area array
 _, arrays = data_list[0]
 point_slider_max = arrays.get("area").GetNumberOfTuples() - 1
 
@@ -72,16 +72,19 @@ walking_legs_state = initialize_walking_legs(renderers[0])
 field_vis_state = initialize_field_visualization(renderers[1], fields)
 
 # === Initialize Curve Data ===
-curve_fields = ["pressure", "flow", "wss"]
+curve_fields = ["pressure", "flow", "wss", "area", "Re"]
 curve_values = []
 for k in range(point_slider_max + 1):
     entry = {f: [] for f in curve_fields}
     for field in curve_fields:
-        values = [field_time_map[field][t].GetValue(k) for t in sorted(field_time_map[field])]
-        y_min, y_max = min(values), max(values)
-        for i, v in enumerate(values):
-            y = (v - y_min) / (y_max - y_min) * 100.0
-            entry[field].append((i, y))
+        if field in field_time_map:  # Check if field exists
+            values = [field_time_map[field][t].GetValue(k) for t in sorted(field_time_map[field])]
+            y_min, y_max = min(values), max(values) if max(values) > min(values) else min(values) + 1
+            for i, v in enumerate(values):
+                y = (v - y_min) / (y_max - y_min) * 100.0
+                entry[field].append((i, y))
+        else:
+            entry[field] = [(i, 0) for i in range(num_timesteps)]  # Fallback for missing fields
     curve_values.append(entry)
 
 # === Add Labels ===
@@ -107,7 +110,7 @@ menu_configs = [
     },
     {
         "renderer": renderers[1],
-        "options": ["Pressure", "Flow", "WSS"],
+        "options": ["Pressure", "Flow", "WSS", "Area", "Re"],
         "default": "pressure",
         "position": (0.02, 0.94, 0.04)
     },
@@ -159,7 +162,7 @@ def menu_interaction_callback(obj, event):
         obj, event, ren_win, interactor, menu_configs, menu_actors_dict, selected_options
     )
     selected_mode = new_selections[renderers[0]]
-    selected_field = new_selections[renderers[1]]
+    selected_field = new_selections[renderers[1]]  # Case-sensitive for "Re"
     selected_record = new_selections[renderers[4]]
     if event == "LeftButtonPressEvent" and selected_record:
         start_video_recording()
@@ -176,13 +179,24 @@ for ren in renderers:
 # === Slider Widgets ===
 slider_point, widget_point = create_slider_widget(
     interactor=interactor,
-    title="Point",
+    title="Point 1",
     min_value=0,
     max_value=point_slider_max,
     x1_pos=0.68,
     x2_pos=0.98,
     y_pos=0.125,
-    slider_color=(0.1, 0.8, 0.1)
+    slider_color=(1, 0, 0)  # Red
+)
+
+slider_point2, widget_point2 = create_slider_widget(
+    interactor=interactor,
+    title="Point 2",
+    min_value=0,
+    max_value=point_slider_max,
+    x1_pos=0.68,
+    x2_pos=0.98,
+    y_pos=0.075,  # Below Point 1
+    slider_color=(0, 0, 1)  # Blue
 )
 
 slider_time, widget_timer = create_slider_widget(
@@ -204,19 +218,22 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
     x1_pos=0.01,
     x2_pos=0.31,
     y_pos=0.125,
-    slider_color=(0.8, 0.3, 0.3)
+    slider_color=(0.3, 0.8, 0.3)
 )
 
 # === Frame Loader ===
 def load_frame(idx):
     t, arrays = data_list[idx % len(data_list)]
-    update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx, int(slider_point.GetValue()))
+    update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx, int(slider_point.GetValue()), int(slider_point2.GetValue()))
     renderers[3].RemoveAllViewProps()
     ipoint = int(slider_point.GetValue())
+    ipoint2 = int(slider_point2.GetValue())
+    # Map selected_field to correct case for curves
+    field_for_curves = "Re" if selected_field.lower() == "re" else selected_field
     if is_animating:
-        update_curves(idx, curve_values[ipoint], [renderers[2]])
+        update_curves(idx, curve_values, field_for_curves, ipoint, ipoint2, [renderers[2]])
     else:
-        display_curves(curve_values[ipoint], [renderers[2]])
+        display_curves(curve_values, field_for_curves, ipoint, ipoint2, [renderers[2]])
     ren_win.Render()
 
 # === Animation Control ===
@@ -255,6 +272,7 @@ ren_win.Render()
 
 widget_timer.EnabledOn()
 widget_point.EnabledOn()
+widget_point2.EnabledOn()
 widget_walking_timer.EnabledOn()
 interactor.CreateRepeatingTimer(FRAME_RATES[selected_mode][0])
 interactor.Start()
