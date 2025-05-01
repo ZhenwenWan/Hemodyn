@@ -40,6 +40,10 @@ time_tags = sorted({k for v in field_time_map.values() for k in v})
 num_timesteps = len(time_tags)
 print(f"Loaded {len(data_list)} frames.")
 
+# Get max value for slider_point from first frame's area array
+_, arrays = data_list[0]
+point_slider_max = arrays.get("area").GetNumberOfTuples() - 1
+
 # === Initialize Render Window and Renderers ===
 ren_win = vtk.vtkRenderWindow()
 ren_win.SetSize(*WINDOW_SIZE)
@@ -70,7 +74,7 @@ field_vis_state = initialize_field_visualization(renderers[1], fields)
 # === Initialize Curve Data ===
 curve_fields = ["pressure", "flow", "wss"]
 curve_values = []
-for k in range(len(data_list)):
+for k in range(point_slider_max + 1):
     entry = {f: [] for f in curve_fields}
     for field in curve_fields:
         values = [field_time_map[field][t].GetValue(k) for t in sorted(field_time_map[field])]
@@ -174,7 +178,7 @@ slider_point, widget_point = create_slider_widget(
     interactor=interactor,
     title="Point",
     min_value=0,
-    max_value=len(data_list) - 1,
+    max_value=point_slider_max,
     x1_pos=0.68,
     x2_pos=0.98,
     y_pos=0.125,
@@ -206,7 +210,7 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
 # === Frame Loader ===
 def load_frame(idx):
     t, arrays = data_list[idx % len(data_list)]
-    update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx)
+    update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx, int(slider_point.GetValue()))
     renderers[3].RemoveAllViewProps()
     ipoint = int(slider_point.GetValue())
     if is_animating:

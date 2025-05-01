@@ -8,7 +8,7 @@ def initialize_field_visualization(renderer, fields):
 
     # Color bar setup
     lut = vtk.vtkLookupTable()
-    lut.SetHueRange(0.667, 0.0)  # Blue (cold) for low, red (warm) for high, matching SVasWalkingLegsFunctions.py
+    lut.SetHueRange(0.667, 0.0)  # Blue (cold) for low, red (warm) for high
     lut.Build()
 
     scalar_bar = vtk.vtkScalarBarActor()
@@ -21,22 +21,39 @@ def initialize_field_visualization(renderer, fields):
     scalar_bar.Modified()
     renderer.AddActor2D(scalar_bar)
 
+    # Create red cube actor
+    cube_source = vtk.vtkCubeSource()
+    cube_source.SetXLength(0.5)  # Small cube size
+    cube_source.SetYLength(0.5)
+    cube_source.SetZLength(0.5)
+    cube_mapper = vtk.vtkPolyDataMapper()
+    cube_mapper.SetInputConnection(cube_source.GetOutputPort())
+    cube_actor = vtk.vtkActor()
+    cube_actor.SetMapper(cube_mapper)
+    cube_actor.GetProperty().SetColor(1, 0, 0)  # Red color
+    cube_actor.GetProperty().SetSpecular(0.3)  # Highlight effect
+    cube_actor.GetProperty().SetSpecularPower(20)
+    cube_actor.SetPosition(0, 0, 0)  # Initial 3D position
+    renderer.AddActor(cube_actor)
+
     state = {
         'renderer': renderer,
         'actors': actors,
         'field_to_index': field_to_index,
         'lut': lut,
-        'scalar_bar': scalar_bar
+        'scalar_bar': scalar_bar,
+        'cube_actor': cube_actor
     }
 
     return state
 
-def update_field_visualization(state, data_list, polydata, selected_field, idx):
+def update_field_visualization(state, data_list, polydata, selected_field, idx, point_index):
     renderer = state['renderer']
     actors = state['actors']
     field_to_index = state['field_to_index']
     lut = state['lut']
     scalar_bar = state['scalar_bar']
+    cube_actor = state['cube_actor']
 
     t, arrays = data_list[idx % len(data_list)]
     area_array = arrays.get("area")
@@ -46,10 +63,10 @@ def update_field_visualization(state, data_list, polydata, selected_field, idx):
         r = area_array.GetValue(j) ** 0.5 * 0.1
         radii.InsertNextValue(r)
 
-    # Clear existing actors except menu actors and scalar bar
+    # Clear existing actors except menu actors, scalar bar, and cube actor
     menu_actors = [a for a in renderer.GetActors2D() if isinstance(a, vtk.vtkTextActor) and a.GetInput() in ["Pressure", "Flow", "WSS"]]
-    for actor in renderer.GetActors():
-        if actor not in menu_actors and actor != scalar_bar:
+    for actor in list(renderer.GetActors()):  # Use list to avoid iterator invalidation
+        if actor not in menu_actors and actor != scalar_bar and actor != cube_actor:
             renderer.RemoveActor(actor)
 
     field = selected_field
@@ -85,7 +102,18 @@ def update_field_visualization(state, data_list, polydata, selected_field, idx):
 
         index = field_to_index[field]
         actors[index].SetMapper(mapper)
+        # Add transparency to the tube
+        actors[index].GetProperty().SetOpacity(0.5)
         renderer.AddActor(actors[index])
+
+    # Update cube actor position
+    if point_index < area_array.GetNumberOfTuples():
+        point_coords = pdata.GetPoint(point_index)
+        # Set 3D position with z-offset
+        cube_actor.SetPosition(point_coords[0], point_coords[1], point_coords[2] + 0.1)
+    else:
+        # Fallback 3D position if point_index is invalid
+        cube_actor.SetPosition(0, 0, 0)
 
     # Ensure scalar bar is added back
     renderer.AddActor2D(scalar_bar)
