@@ -18,7 +18,7 @@ importlib.reload(SVasFieldVisualization)
 from SVasFieldVisualization import initialize_field_visualization, update_field_visualization
 import SVasCurves
 importlib.reload(SVasCurves)
-from SVasCurves import display_curves, update_curves
+from SVasCurves import display_curves
 import SVasMenuUtils
 importlib.reload(SVasMenuUtils)
 from SVasMenuUtils import create_menu, handle_menu_interaction
@@ -77,15 +77,13 @@ curve_values = []
 for k in range(point_slider_max + 1):
     entry = {f: [] for f in curve_fields}
     for field in curve_fields:
-        if field in field_time_map:  # Check if field exists
-            values = [field_time_map[field][t].GetValue(k) for t in sorted(field_time_map[field])]
-            y_min, y_max = min(values), max(values) if max(values) > min(values) else min(values) + 1
-            for i, v in enumerate(values):
-                y = (v - y_min) / (y_max - y_min) * 100.0
-                entry[field].append((i, y))
-        else:
-            entry[field] = [(i, 0) for i in range(num_timesteps)]  # Fallback for missing fields
+        values = [field_time_map[field][t].GetValue(k) for t in range(num_timesteps)]
+        y_min, y_max = min(values), max(values)
+        for i, v in enumerate(values):
+            y = (v - y_min) / (y_max - y_min) * 100.0
+            entry[field].append((i, y))
     curve_values.append(entry)
+
 
 # === Add Labels ===
 def add_label(text, renderer, x, y):
@@ -167,7 +165,7 @@ def menu_interaction_callback(obj, event):
     if event == "LeftButtonPressEvent" and selected_record:
         start_video_recording()
     if event == "LeftButtonPressEvent" and (0.333 <= obj.GetEventPosition()[0] / ren_win.GetSize()[0] <= 0.667):
-        load_frame(step)
+        timer_callback(obj, event)
     ren_win.Render()
 
 interactor.AddObserver("LeftButtonPressEvent", menu_interaction_callback)
@@ -179,7 +177,7 @@ for ren in renderers:
 # === Slider Widgets ===
 slider_point, widget_point = create_slider_widget(
     interactor=interactor,
-    title="Point 1",
+    title="V.Point 1",
     min_value=0,
     max_value=point_slider_max,
     x1_pos=0.68,
@@ -190,7 +188,7 @@ slider_point, widget_point = create_slider_widget(
 
 slider_point2, widget_point2 = create_slider_widget(
     interactor=interactor,
-    title="Point 2",
+    title="V.Point 2",
     min_value=0,
     max_value=point_slider_max,
     x1_pos=0.68,
@@ -199,7 +197,7 @@ slider_point2, widget_point2 = create_slider_widget(
     slider_color=(0, 0, 1)  # Blue
 )
 
-slider_time, widget_timer = create_slider_widget(
+slider_pulse, widget_timer = create_slider_widget(
     interactor=interactor,
     title="Pulse Frame /80",
     min_value=0,
@@ -210,7 +208,7 @@ slider_time, widget_timer = create_slider_widget(
     slider_color=(0.3, 0.3, 0.8)
 )
 
-slider_walking_time, widget_walking_timer = create_slider_widget(
+slider_foot, widget_walking_timer = create_slider_widget(
     interactor=interactor,
     title="Walking Frame /50",
     min_value=0,
@@ -224,25 +222,22 @@ slider_walking_time, widget_walking_timer = create_slider_widget(
 # === Frame Loader ===
 def load_frame(idx):
     t, arrays = data_list[idx % len(data_list)]
-    update_field_visualization(field_vis_state, data_list, polydata, selected_field, idx, int(slider_point.GetValue()), int(slider_point2.GetValue()))
-    renderers[3].RemoveAllViewProps()
     ipoint = int(slider_point.GetValue())
     ipoint2 = int(slider_point2.GetValue())
-    # Map selected_field to correct case for curves
-    field_for_curves = "Re" if selected_field.lower() == "re" else selected_field
-    if is_animating:
-        update_curves(idx, curve_values, field_for_curves, ipoint, ipoint2, [renderers[2]])
-    else:
-        display_curves(curve_values, field_for_curves, ipoint, ipoint2, [renderers[2]])
-    ren_win.Render()
+    field = "Re" if selected_field.lower() == "re" else selected_field
+    update_field_visualization(field_vis_state, data_list, polydata, field, idx, ipoint, ipoint2)
+    display_curves(curve_values, field, ipoint, ipoint2, renderers[2])
 
 # === Animation Control ===
 def on_keypress(obj, event):
     global is_animating
     if obj.GetKeySym() == 'a':
         is_animating = not is_animating
-    load_frame(step)
-    ren_win.Render()
+    if obj.GetKeySym() == 't':
+        ipoint = int(slider_point.GetValue())
+        field = "Re" if selected_field.lower() == "re" else selected_field
+        values = curve_values[ipoint][field]
+        
 
 def timer_callback(obj, event):
     global step, walking_step
@@ -250,30 +245,22 @@ def timer_callback(obj, event):
     if is_animating:
         step = (step + frames_per_tick) % num_timesteps
         walking_step = (walking_step + frames_per_tick) % WALKING_NUM_TIMESTEPS
+        slider_pulse.SetValue(step)
+        slider_foot.SetValue(walking_step)
     else:
-        step = int(slider_time.GetValue())
-        walking_step = int(slider_walking_time.GetValue())
-    slider_time.SetValue(step)
-    slider_walking_time.SetValue(walking_step)
+        step = int(slider_pulse.GetValue())
+        walking_step = int(slider_foot.GetValue())
     load_frame(step)
     update_walking_legs(walking_legs_state, walking_step)
     ren_win.Render()
-    interactor.DestroyTimer()
-    interactor.CreateRepeatingTimer(timer_ms)
 
 # === Initialize and Start ===
 for renderer in renderers:
     renderer.ResetCamera()
-
 interactor.AddObserver("KeyPressEvent", on_keypress)
 interactor.AddObserver("TimerEvent", timer_callback)
 interactor.Initialize()
 ren_win.Render()
-
-widget_timer.EnabledOn()
-widget_point.EnabledOn()
-widget_point2.EnabledOn()
-widget_walking_timer.EnabledOn()
 interactor.CreateRepeatingTimer(FRAME_RATES[selected_mode][0])
 interactor.Start()
 

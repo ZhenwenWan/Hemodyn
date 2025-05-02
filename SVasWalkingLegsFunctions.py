@@ -383,7 +383,7 @@ def update_walking_legs(state, index):
         o2_vtk.SetName("o2vas")
         poly_data.GetPointData().AddArray(o2_vtk)
         o2_mapper.SetInputData(poly_data)
-        o2_mapper.SetScalarRange(20, 80)
+        o2_mapper.SetScalarRange(50, 70)
         o2_mapper.Update()
         o2_actor.Modified()
 
@@ -395,7 +395,7 @@ def update_walking_legs(state, index):
         o2_vtk2.SetName("o2vas")
         poly_data2.GetPointData().AddArray(o2_vtk2)
         o2_mapper2.SetInputData(poly_data2)
-        o2_mapper2.SetScalarRange(20, 80)
+        o2_mapper2.SetScalarRange(50, 70)
         o2_mapper2.Update()
         o2_actor2.Modified()
 
@@ -408,7 +408,7 @@ def update_walking_legs(state, index):
         o2mus_vtk.SetName("o2mus")
         poly_data_mus.GetPointData().AddArray(o2mus_vtk)
         o2mus_mapper.SetInputData(poly_data_mus)
-        o2mus_mapper.SetScalarRange(20, 80)
+        o2mus_mapper.SetScalarRange(50, 70)
         o2mus_mapper.Update()
         o2mus_actor.Modified()
 
@@ -420,7 +420,7 @@ def update_walking_legs(state, index):
         o2mus_vtk2.SetName("o2mus")
         poly_data_mus2.GetPointData().AddArray(o2mus_vtk2)
         o2mus_mapper2.SetInputData(poly_data_mus2)
-        o2mus_mapper2.SetScalarRange(20, 80)
+        o2mus_mapper2.SetScalarRange(50, 70)
         o2mus_mapper2.Update()
         o2mus_actor2.Modified()
 

@@ -126,67 +126,14 @@ def update_field_visualization(state, data_list, polydata, selected_field, idx, 
         # Update cube positions
         if point_index < area_array.GetNumberOfTuples():
             point_coords = pdata.GetPoint(point_index)
-            cube_actor.SetPosition(point_coords[0], point_coords[1], point_coords[2] + 0.1)
+            cube_actor.SetPosition(point_coords[0], point_coords[1], point_coords[2])
         else:
             cube_actor.SetPosition(0, 0, 0)
 
         if point_index2 < area_array.GetNumberOfTuples():
             point_coords2 = pdata.GetPoint(point_index2)
-            cube_actor2.SetPosition(point_coords2[0], point_coords[2], point_coords2[2] + 0.1)
+            cube_actor2.SetPosition(point_coords2[0], point_coords[1], point_coords2[2])
         else:
-            cube_actor2.SetPosition(0, 0, 0)
-    else:
-        # Fallback: Use area array as default visualization if field data is missing
-        if area_array is not None:
-            pdata = vtk.vtkPolyData()
-            pdata.SetPoints(polydata.GetPoints())
-            pdata.SetLines(polydata.GetLines())
-            pdata.GetPointData().AddArray(radii)
-            pdata.GetPointData().AddArray(area_array)
-            pdata.GetPointData().SetActiveScalars(area_array.GetName())
-            pdata.GetPointData().SetActiveScalars("TubeRadius")
-
-            tube_filter = vtk.vtkTubeFilter()
-            tube_filter.SetInputData(pdata)
-            tube_filter.SetVaryRadiusToVaryRadiusByAbsoluteScalar()
-            tube_filter.SetNumberOfSides(12)
-            tube_filter.Update()
-
-            # Set scalar range for area array
-            scalar_range = area_array.GetRange()
-            lut.SetTableRange(scalar_range)
-            lut.Build()
-
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(tube_filter.GetOutputPort())
-            mapper.SetScalarVisibility(True)
-            mapper.SetColorModeToMapScalars()
-            mapper.SetScalarModeToUsePointFieldData()
-            mapper.SelectColorArray(area_array.GetName())
-            mapper.SetScalarRange(scalar_range)
-            mapper.SetLookupTable(lut)
-
-            # Use a fallback actor index (e.g., 0) to avoid overwriting
-            index = 0
-            actors[index].SetMapper(mapper)
-            actors[index].GetProperty().SetOpacity(0.5)
-            renderer.AddActor(actors[index])
-
-            # Update cube positions
-            if point_index < area_array.GetNumberOfTuples():
-                point_coords = pdata.GetPoint(point_index)
-                cube_actor.SetPosition(point_coords[0], point_coords[1], point_coords[2] + 0.1)
-            else:
-                cube_actor.SetPosition(0, 0, 0)
-
-            if point_index2 < area_array.GetNumberOfTuples():
-                point_coords2 = pdata.GetPoint(point_index2)
-                cube_actor2.SetPosition(point_coords2[0], point_coords2[1], point_coords2[2] + 0.1)
-            else:
-                cube_actor2.SetPosition(0, 0, 0)
-        else:
-            # If no area array, set cubes to origin
-            cube_actor.SetPosition(0, 0, 0)
             cube_actor2.SetPosition(0, 0, 0)
 
     # Ensure scalar bar is added back

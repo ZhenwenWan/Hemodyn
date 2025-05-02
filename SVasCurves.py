@@ -1,8 +1,7 @@
 import vtk
 
-def display_curves(curve_values, field, point_index, point_index2, renderers):
-    # Clear existing actors from the renderer
-    renderer = renderers[0]  # Use the first (only) renderer
+def display_curves(curve_values, field, point_index, point_index2, renderer):
+    renderer.RemoveAllActors()
     renderer.RemoveAllViewProps()
 
     # Colors for the two curves (red for point_index, blue for point_index2)
@@ -45,8 +44,4 @@ def display_curves(curve_values, field, point_index, point_index2, renderers):
         renderer.AddActor(actor)
 
     renderer.ResetCamera()
-
-def update_curves(idx, curve_values, field, point_index, point_index2, renderers):
-    # For simplicity, re-render both curves
-    display_curves(curve_values, field, point_index, point_index2, renderers)
 
