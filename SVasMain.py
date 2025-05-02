@@ -179,7 +179,7 @@ slider_point, widget_point = create_slider_widget(
     interactor=interactor,
     title="V.Point 1",
     min_value=0,
-    max_value=point_slider_max,
+    max_value=point_slider_max - 1,
     x1_pos=0.68,
     x2_pos=0.98,
     y_pos=0.125,
@@ -190,7 +190,7 @@ slider_point2, widget_point2 = create_slider_widget(
     interactor=interactor,
     title="V.Point 2",
     min_value=0,
-    max_value=point_slider_max,
+    max_value=point_slider_max - 1,
     x1_pos=0.68,
     x2_pos=0.98,
     y_pos=0.075,  # Below Point 1
@@ -250,9 +250,12 @@ def timer_callback(obj, event):
     else:
         step = int(slider_pulse.GetValue())
         walking_step = int(slider_foot.GetValue())
-    load_frame(step)
-    update_walking_legs(walking_legs_state, walking_step)
-    ren_win.Render()
+    try:
+        load_frame(step)
+        update_walking_legs(walking_legs_state, walking_step)
+    except Exception as e:
+        print(f"Error in timer_callback: {e}")
+    ren_win.Render()  # Ensure render is always called
 
 # === Initialize and Start ===
 for renderer in renderers:

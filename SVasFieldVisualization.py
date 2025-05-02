@@ -132,7 +132,7 @@ def update_field_visualization(state, data_list, polydata, selected_field, idx, 
 
         if point_index2 < area_array.GetNumberOfTuples():
             point_coords2 = pdata.GetPoint(point_index2)
-            cube_actor2.SetPosition(point_coords2[0], point_coords[1], point_coords2[2])
+            cube_actor2.SetPosition(point_coords2[0], point_coords2[1], point_coords2[2])
         else:
             cube_actor2.SetPosition(0, 0, 0)
 
