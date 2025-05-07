@@ -2,7 +2,8 @@ import vtk
 import glob
 import os
 import numpy as np
-from vtk.util.numpy_support import vtk_to_numpy, numpy_to_vtk
+import cv2
+from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
 def ManualPolyData():
     points = vtk.vtkPoints()
@@ -12,7 +13,6 @@ def ManualPolyData():
     scaley = 0.030
     scalez = 0.01
     
-    # Add points
     points.InsertNextPoint(-2.*scalex+0.005, 0*scaley, 0*scalez)
     points.InsertNextPoint(-1.*scalex+0.005, 1*scaley, 0*scalez)
     points.InsertNextPoint(-1.*scalex+0.005, 4*scaley, 0*scalez)
@@ -22,7 +22,6 @@ def ManualPolyData():
     points.InsertNextPoint(-4.*scalex+0.005, 1*scaley, 0*scalez)
     points.InsertNextPoint(-3.*scalex+0.005, 0*scaley, 0*scalez)
     
-    # Create a closed polygon (connect all points in order and back to start)
     polygon = vtk.vtkPolygon()
     polygon.GetPointIds().SetNumberOfIds(8)
     for i in range(8):
@@ -31,30 +30,140 @@ def ManualPolyData():
     
     polydata = vtk.vtkPolyData()
     polydata.SetPoints(points)
-    polydata.SetPolys(cells)  # Use SetPolys for polygons
+    polydata.SetPolys(cells)
     
     return polydata
 
+def initialize_beatingheart(renderer):
+    folder = "youtube_frames"
+    file_pattern = os.path.join(folder, "frame_0*.png")
+    files = sorted(glob.glob(file_pattern))
+    print(f"Found {len(files)} heart animation files")
+
+    if not files:
+        print("Warning: No PNG files found for heart animation")
+        return None, []
+
+    # Load initial PNG image with cv2
+    image = cv2.imread(files[0])
+    if image is None:
+        print(f"Warning: Failed to load PNG {files[0]}")
+        return None, []
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
+    image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_AREA)
+    image = np.flipud(image)  # Flip vertically to match VTK's coordinate system
+    height, width, channels = image.shape
+    if channels != 3:
+        print(f"Warning: PNG {files[0]} is not RGB (channels={channels})")
+        return None, []
+
+    # Create VTK image data for texture
+    image_data = vtk.vtkImageData()
+    image_data.SetDimensions(width, height, 1)
+    image_data.SetSpacing(1, 1, 1)
+    image_data.SetOrigin(0, 0, 0)
+    image_data.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 3)
+    vtk_array = numpy_to_vtk(image.ravel(), deep=True)
+    image_data.GetPointData().SetScalars(vtk_array)
+
+    # Create texture
+    texture = vtk.vtkTexture()
+    texture.SetInputData(image_data)
+    texture.InterpolateOn()
+
+    # Create a plane to display the texture
+    viewport_xmin, viewport_ymin, viewport_xmax, viewport_ymax = 0.0, 0.2, 0.333, 1.0
+    viewport_width = viewport_xmax - viewport_xmin  # 0.333
+    viewport_height = viewport_ymax - viewport_ymin  # 0.8
+
+    # Size: 20% of viewport width and height, 1:1 ratio
+    image_size = 0.2 * viewport_width  # 0.0666
+
+    # Position: 2% offset from bottom-left of viewport
+    offset_x = 0.02 * viewport_width  # 0.00666
+    offset_y = 0.02 * viewport_height  # 0.016
+    pos_x = viewport_xmin + offset_x  # 0.00666
+    pos_y = viewport_ymin + offset_y  # 0.216
+
+    plane = vtk.vtkPlaneSource()
+    plane.SetOrigin(pos_x, pos_y, 0)
+    plane.SetPoint1(pos_x + image_size, pos_y, 0)
+    plane.SetPoint2(pos_x, pos_y + image_size, 0)
+    plane.Update()
+
+    # Set texture coordinates
+    texture_coords = vtk.vtkFloatArray()
+    texture_coords.SetNumberOfComponents(2)
+    texture_coords.SetNumberOfTuples(4)
+    texture_coords.SetTuple2(0, 0, 0)  # Bottom-left
+    texture_coords.SetTuple2(1, 1, 0)  # Bottom-right
+    texture_coords.SetTuple2(2, 1, 1)  # Top-right
+    texture_coords.SetTuple2(3, 0, 1)  # Top-left
+    plane.GetOutput().GetPointData().SetTCoords(texture_coords)
+
+    # Create mapper and actor
+    mapper = vtk.vtkPolyDataMapper()
+    mapper.SetInputConnection(plane.GetOutputPort())
+
+    actor = vtk.vtkActor()
+    actor.SetMapper(mapper)
+    actor.SetTexture(texture)
+    actor.GetProperty().SetOpacity(1.0)
+
+    renderer.AddActor(actor)
+    print("Heart actor added to renderer")
+    return actor, files
+
+def update_heart(index, heart_actor, heart_files, renderer):
+    if not heart_actor or not heart_files:
+        return
+
+    file_index = index % len(heart_files)
+    image = cv2.imread(heart_files[file_index])
+    if image is None:
+        print(f"Warning: Failed to load PNG {heart_files[file_index]}")
+        return
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_AREA)
+    image = np.flipud(image)
+    height, width, channels = image.shape
+    if channels != 3:
+        print(f"Warning: PNG {heart_files[file_index]} is not RGB (channels={channels})")
+        return
+
+    # Create VTK image data for texture
+    image_data = vtk.vtkImageData()
+    image_data.SetDimensions(width, height, 1)
+    image_data.SetSpacing(1, 1, 1)
+    image_data.SetOrigin(0, 0, 0)
+    image_data.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 3)
+    vtk_array = numpy_to_vtk(image.ravel(), deep=True)
+    image_data.GetPointData().SetScalars(vtk_array)
+
+    # Update texture
+    texture = vtk.vtkTexture()
+    texture.SetInputData(image_data)
+    texture.InterpolateOn()
+    heart_actor.SetTexture(texture)
+    heart_actor.Modified()
+    print(f"Updated heart image with file: {heart_files[file_index]}")
 
 def initialize_walking_legs(renderer):
     folder = "../CFD/modelFrame03"
     file_pattern = os.path.join(folder, "case_t*.vtu")
     files = sorted(glob.glob(file_pattern))
 
-    # Debugging: Print folder and file information
     print(f"Loading VTU files from: {os.path.abspath(folder)}")
     print(f"File pattern: {file_pattern}")
     print(f"Found {len(files)} files")
 
-    # Check for empty files list
     if not files:
-        raise FileNotFoundError(f"No VTU files found in {os.path.abspath(folder)} matching pattern 'case_t*.vtu'. Please verify the folder and files exist.")
+        raise FileNotFoundError(f"No VTU files found in {os.path.abspath(folder)} matching pattern 'case_t*.vtu'.")
 
     reader = vtk.vtkXMLUnstructuredGridReader()
     geometry_filter = vtk.vtkGeometryFilter()
     arrow = vtk.vtkArrowSource()
     
-    # First leg glyph (velocity)
     glyph = vtk.vtkGlyph3D()
     glyph.SetSourceConnection(arrow.GetOutputPort())
     glyph.SetVectorModeToUseVector()
@@ -77,7 +186,6 @@ def initialize_walking_legs(renderer):
     actor = vtk.vtkActor()
     actor.SetMapper(mapper)
 
-    # Second leg glyph (velocity)
     glyph2 = vtk.vtkGlyph3D()
     glyph2.SetSourceConnection(arrow.GetOutputPort())
     glyph2.SetVectorModeToUseVector()
@@ -96,7 +204,6 @@ def initialize_walking_legs(renderer):
     actor2 = vtk.vtkActor()
     actor2.SetMapper(mapper2)
 
-    # O2Vas actors (vascular pipes)
     lut_o2 = vtk.vtkLookupTable()
     lut_o2.SetHueRange(0.667, 0.0)
     lut_o2.Build()
@@ -121,23 +228,22 @@ def initialize_walking_legs(renderer):
     o2_actor2.SetMapper(o2_mapper2)
     o2_actor2.GetProperty().SetOpacity(0.5)
 
-    # O2Mus actors (muscles)
     lut_o2mus = vtk.vtkLookupTable()
-    lut_o2mus.SetHueRange(0.333, 0.0)  # Green to red for distinction
+    lut_o2mus.SetHueRange(0.333, 0.0)
     lut_o2mus.Build()
 
     o2mus_mapper = vtk.vtkPolyDataMapper()
-    o2mus_mapper.SetLookupTable(lut_o2)
+    o2mus_mapper.SetLookupTable(lut_o2mus)
     o2mus_mapper.ScalarVisibilityOn()
     o2mus_mapper.SetScalarModeToUsePointFieldData()
     o2mus_mapper.SelectColorArray("o2mus")
 
     o2mus_actor = vtk.vtkActor()
     o2mus_actor.SetMapper(o2mus_mapper)
-    o2mus_actor.GetProperty().SetOpacity(0.3)  # Lower opacity for distinction
+    o2mus_actor.GetProperty().SetOpacity(0.3)
 
     o2mus_mapper2 = vtk.vtkPolyDataMapper()
-    o2mus_mapper2.SetLookupTable(lut_o2)
+    o2mus_mapper2.SetLookupTable(lut_o2mus)
     o2mus_mapper2.ScalarVisibilityOn()
     o2mus_mapper2.SetScalarModeToUsePointFieldData()
     o2mus_mapper2.SelectColorArray("o2mus")
@@ -151,11 +257,10 @@ def initialize_walking_legs(renderer):
     proper_mapper.SetInputData(proper_pdata)
     proper_actor = vtk.vtkActor()
     proper_actor.SetMapper(proper_mapper)
-    proper_actor.GetProperty().SetOpacity(0.3) 
-    proper_actor.GetProperty().SetColor(1,0,0) 
+    proper_actor.GetProperty().SetOpacity(0.3)
+    proper_actor.GetProperty().SetColor(1, 0, 0)
     proper_actor.GetProperty().EdgeVisibilityOn()
 
-    # Add actors to renderer
     renderer.AddActor(actor)
     renderer.AddActor(actor2)
     renderer.AddActor(o2_actor)
@@ -174,7 +279,6 @@ def initialize_walking_legs(renderer):
     o2_bar.Modified()
     renderer.AddActor2D(o2_bar)
 
-    # Text actor
     text_actor = vtk.vtkTextActor()
     text_actor.GetTextProperty().SetFontSize(10)
     text_actor.GetTextProperty().SetColor(1, 1, 1)
@@ -182,7 +286,57 @@ def initialize_walking_legs(renderer):
     text_actor.SetPosition(0.80, 0.90)
     renderer.AddActor2D(text_actor)
 
-    # State
+    # Extract O2Vas and O2Mus Curves for Renderer 3
+    o2vas_values = []
+    o2mus_values = []
+    reader.SetFileName(files[0])
+    reader.Update()
+    poly_data = reader.GetOutput()
+    bounds = poly_data.GetBounds()
+    x_min, x_max, y_min, y_max = bounds[0], bounds[1], bounds[2], bounds[3]
+    percentage = 50.0
+    x = x_min + (x_max - x_min) * (percentage / 100.0)
+    y = 0.5 * (y_max + y_min)
+    z = 0.0
+    query_point = [x, y, z]
+
+    locator = vtk.vtkPointLocator()
+    locator.SetDataSet(poly_data)
+    locator.BuildLocator()
+    closest_point_id = locator.FindClosestPoint(query_point)
+
+    for file in files:
+        reader.SetFileName(file)
+        reader.Update()
+        poly_data = reader.GetOutput()
+        o2vas_array = poly_data.GetPointData().GetArray("o2vas")
+        o2mus_array = poly_data.GetPointData().GetArray("o2mus")
+        if o2vas_array:
+            o2vas_values.append(o2vas_array.GetValue(closest_point_id))
+        else:
+            o2vas_values.append(0.0)
+        if o2mus_array:
+            o2mus_values.append(o2mus_array.GetValue(closest_point_id))
+        else:
+            o2mus_values.append(0.0)
+
+    if o2vas_values:
+        v_min, v_max = min(o2vas_values), max(o2vas_values)
+        if v_max != v_min:
+            o2vas_values = [(i, (v - v_min) / (v_max - v_min) * 100.0) for i, v in enumerate(o2vas_values)]
+        else:
+            o2vas_values = [(i, 0.0) for i, v in enumerate(o2vas_values)]
+    if o2mus_values:
+        m_min, m_max = min(o2mus_values), max(o2mus_values)
+        if m_max != m_min:
+            o2mus_values = [(i, (v - m_min) / (m_max - m_min) * 100.0) for i, v in enumerate(o2mus_values)]
+        else:
+            o2mus_values = [(i, 0.0) for i, v in enumerate(o2mus_values)]
+
+    # Initialize heart animation for Renderer 0
+    heart_actor, heart_files = initialize_beatingheart(renderer)
+    heart_index = 0
+
     state = {
         'renderer': renderer,
         'files': files,
@@ -205,17 +359,18 @@ def initialize_walking_legs(renderer):
         'text_actor': text_actor,
         'current_index': 0,
         'frames_period': 50,
-        'frames_phase': 0,
-        'a_vec': np.array([0.05, 0.05, 0.05])
+        'a_vec': np.array([0.05, 0.05, 0.05]),
+        'heart_actor': heart_actor,
+        'heart_files': heart_files,
+        'heart_index': heart_index
     }
 
-    return state
+    return state, [o2vas_values, o2mus_values]
 
 def project_onto_leg_motion(index, coords, velocity_array, phase_offset=0.0, frames_period=50, contract_y=False):
-    # Apply y-coordinate contraction if specified (for vascular pipes)
     if contract_y:
         coords = coords.copy()
-        coords[:, 1] *= 0.1  # Contract y to 10%
+        coords[:, 1] *= 0.1
 
     A0 = np.array([-0.045, 0.0, 0.0])
     B0 = np.array([0.045, 0.0, 0.0])
@@ -282,33 +437,36 @@ def update_walking_legs(state, index):
     o2mus_actor2 = state['o2mus_actor2']
     text_actor = state['text_actor']
     frames_period = state['frames_period']
+    heart_actor = state['heart_actor']
+    heart_files = state['heart_files']
+    heart_index = state['heart_index']
 
-    # Check for empty files list
+    # Update heart animation in Renderer 0
+    if heart_actor and heart_files:
+        state['heart_index'] = (heart_index + 1) % len(heart_files)
+        update_heart(state['heart_index'], heart_actor, heart_files, renderer)
+
     if not files:
         text_actor.SetInput("Error: No VTU files found in modelFrame03")
         return
 
-    # Ensure valid index
     walking_index = index % len(files)
     if walking_index < 0 or walking_index >= len(files):
         text_actor.SetInput(f"Invalid Frame: {walking_index}")
         return
     state['current_index'] = walking_index
 
-    # Read VTU file
     reader.SetFileName(files[walking_index])
     reader.Update()
     geometry_filter.SetInputData(reader.GetOutput())
     geometry_filter.Update()
     poly_data_base = geometry_filter.GetOutput()
 
-    # Create polydata for vascular pipes (velocity and O2Vas)
     poly_data = vtk.vtkPolyData()
     poly_data.DeepCopy(poly_data_base)
     poly_data2 = vtk.vtkPolyData()
     poly_data2.DeepCopy(poly_data_base)
 
-    # Create polydata for muscles (O2Mus)
     poly_data_mus = vtk.vtkPolyData()
     poly_data_mus.DeepCopy(poly_data_base)
     poly_data_mus2 = vtk.vtkPolyData()
@@ -319,23 +477,18 @@ def update_walking_legs(state, index):
     velocity_array = poly_data.GetPointData().GetArray("velocity")
     velocity_array_np = vtk_to_numpy(velocity_array) if velocity_array else None
 
-    # First leg: Vascular pipes (with y-contraction)
     scaled_coords, vec_np = project_onto_leg_motion(walking_index, coords, velocity_array_np, phase_offset=0.0, frames_period=frames_period, contract_y=True)
     poly_data.GetPoints().SetData(numpy_to_vtk(scaled_coords, deep=True))
 
-    # Second leg: Vascular pipes (with y-contraction)
     scaled_coords2, vec_np2 = project_onto_leg_motion(walking_index, coords, velocity_array_np, phase_offset=np.pi, frames_period=frames_period, contract_y=True)
     poly_data2.GetPoints().SetData(numpy_to_vtk(scaled_coords2, deep=True))
 
-    # First leg: Muscles (no y-contraction)
     scaled_coords_mus, _ = project_onto_leg_motion(walking_index, coords, None, phase_offset=0.0, frames_period=frames_period, contract_y=False)
     poly_data_mus.GetPoints().SetData(numpy_to_vtk(scaled_coords_mus, deep=True))
 
-    # Second leg: Muscles (no y-contraction)
     scaled_coords_mus2, _ = project_onto_leg_motion(walking_index, coords, None, phase_offset=np.pi, frames_period=frames_period, contract_y=False)
     poly_data_mus2.GetPoints().SetData(numpy_to_vtk(scaled_coords_mus2, deep=True))
 
-    # Process velocity for first leg
     if velocity_array_np is not None:
         norms = np.linalg.norm(vec_np, axis=1)
         norms[norms < 1e-9] = 1e-9
@@ -356,7 +509,6 @@ def update_walking_legs(state, index):
         mapper.SetScalarRange(clamped.min(), clamped.max())
         glyph.SetScaleFactor(0.015 * region_scale / clamped.max())
 
-    # Process velocity for second leg
     if velocity_array_np is not None:
         norms2 = np.linalg.norm(vec_np2, axis=1)
         norms2[norms2 < 1e-9] = 1e-9
@@ -371,14 +523,14 @@ def update_walking_legs(state, index):
         scaled_log_vtk2.SetName("velocity_mag")
         poly_data2.GetPointData().AddArray(scaled_log_vtk2)
 
-        mapper2.SetScalarRange(clamped2.min(), clamped2.max())
+        mapper2.SetScalarRange(clamped2.min(), clamped.max())
         glyph2.SetScaleFactor(0.015 * region_scale / clamped2.max())
 
-    # Process O2Vas for first leg
     o2_array = poly_data.GetPointData().GetArray("o2vas")
     if o2_array:
         o2_np = vtk_to_numpy(o2_array)
-        o2_clamped = np.clip(o2_np, np.percentile(o2_np, 0), np.percentile(o2_np, 100))
+        o2_min, o2_max = np.percentile(o2_np, [0, 100])
+        o2_clamped = np.clip(o2_np, o2_min, o2_max)
         o2_vtk = numpy_to_vtk(o2_clamped, deep=True)
         o2_vtk.SetName("o2vas")
         poly_data.GetPointData().AddArray(o2_vtk)
@@ -387,10 +539,9 @@ def update_walking_legs(state, index):
         o2_mapper.Update()
         o2_actor.Modified()
 
-    # Process O2Vas for second leg
     if o2_array:
         o2_np2 = vtk_to_numpy(o2_array)
-        o2_clamped2 = np.clip(o2_np2, np.percentile(o2_np2, 0), np.percentile(o2_np2, 100))
+        o2_clamped2 = np.clip(o2_np2, o2_min, o2_max)
         o2_vtk2 = numpy_to_vtk(o2_clamped2, deep=True)
         o2_vtk2.SetName("o2vas")
         poly_data2.GetPointData().AddArray(o2_vtk2)
@@ -399,11 +550,11 @@ def update_walking_legs(state, index):
         o2_mapper2.Update()
         o2_actor2.Modified()
 
-    # Process O2Mus for first leg
     o2mus_array = poly_data_mus.GetPointData().GetArray("o2mus")
     if o2mus_array:
         o2mus_np = vtk_to_numpy(o2mus_array)
-        o2mus_clamped = np.clip(o2mus_np, np.percentile(o2mus_np, 0), np.percentile(o2mus_np, 100))
+        o2mus_min, o2mus_max = np.percentile(o2mus_np, [0, 100])
+        o2mus_clamped = np.clip(o2mus_np, o2mus_min, o2mus_max)
         o2mus_vtk = numpy_to_vtk(o2mus_clamped, deep=True)
         o2mus_vtk.SetName("o2mus")
         poly_data_mus.GetPointData().AddArray(o2mus_vtk)
@@ -412,10 +563,9 @@ def update_walking_legs(state, index):
         o2mus_mapper.Update()
         o2mus_actor.Modified()
 
-    # Process O2Mus for second leg
     if o2mus_array:
         o2mus_np2 = vtk_to_numpy(o2mus_array)
-        o2mus_clamped2 = np.clip(o2mus_np2, np.percentile(o2mus_np2, 0), np.percentile(o2mus_np2, 100))
+        o2mus_clamped2 = np.clip(o2mus_np2, o2mus_min, o2mus_max)
         o2mus_vtk2 = numpy_to_vtk(o2mus_clamped2, deep=True)
         o2mus_vtk2.SetName("o2mus")
         poly_data_mus2.GetPointData().AddArray(o2mus_vtk2)
@@ -436,7 +586,7 @@ def update_walking_legs(state, index):
     mapper2.Update()
     actor2.Modified()
 
-    #text_actor.SetInput(f"Frame: {walking_index}")
-    if index==0:
-        renderer.ResetCamera()
+    # Avoid camera reset to maintain heart animation viewport
+    # if index == 0:
+    #     renderer.ResetCamera()
 
