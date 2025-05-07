@@ -1,7 +1,7 @@
 import tkinter as tk
 
-x, y = 400, 230
-w, h = 550, 550
+x, y = 535, 395
+w, h = 530, 525
 
 root = tk.Tk()
 root.overrideredirect(True)

@@ -12,7 +12,7 @@ importlib.reload(SVasWalkingLegsFunctions)
 from SVasWalkingLegsFunctions import initialize_walking_legs, update_walking_legs
 import SVasHeartFunctions
 importlib.reload(SVasHeartFunctions)
-from SVasHeartFunctions import initialize_heart, update_heart
+from SVasHeartFunctions import initialize_heart, update_heart, initialize_image_animation, update_image_animation
 import SVasSliderUtils
 importlib.reload(SVasSliderUtils)
 from SVasSliderUtils import create_slider_widget
@@ -52,42 +52,43 @@ ren_win.SetSize(*WINDOW_SIZE)
 
 renderers = []
 viewport_configs = [
-    (0.0, 0.6, 0.333, 1.0),     # New 0: Walking legs (Current 0, no heart)
-    (0.333, 0.6, 0.666, 1.0),   # New 1: Current 1 (field visualization)
-    (0.666, 0.6, 1.0, 1.0),     # New 2: Heart animation (from Current 0)
-    (0.0, 0.2, 0.333, 0.6),     # New 3: Current 3 (o2vas, o2mus curves)
-    (0.333, 0.2, 0.666, 0.6),   # New 4: Current 2 (pulse curves)
-    (0.666, 0.2, 1.0, 0.6),     # New 5: Empty
-    (0.0, 0.0, 1.0, 0.2)        # New 6: Current 4 (controller)
+    (0.0, 0.6, 0.333, 1.0),     # New 0: Walking legs
+    (0.333, 0.6, 0.666, 1.0),   # New 1: Field visualization
+    (0.666, 0.6, 1.0, 1.0),     # New 2: Heart animation
+    (0.0, 0.2, 0.333, 0.6),     # New 3: O2vas, o2mus curves
+    (0.333, 0.2, 0.666, 0.6),   # New 4: Pulse curves
+    (0.666, 0.2, 1.0, 0.6),     # New 5: MRI frames animation
+    (0.0, 0.0, 1.0, 0.2)        # New 6: Controller
 ]
 
 for idx, viewport in enumerate(viewport_configs):
     ren = vtk.vtkRenderer()
     ren.SetViewport(viewport)
-    shade = 0.45 + 0.05 * idx / 7.0  # Gradient for distinction
+    shade = 0.45 + 0.05 * idx / 7.0
     ren.SetBackground(shade, shade, shade)
     ren_win.AddRenderer(ren)
     renderers.append(ren)
 
-renderers[6].SetBackground(0.4, 0.4, 0.4)  # Match original controller background
-renderers[2].SetBackground(0.3, 0.3, 0.3)  # Ensure neutral background for heart colors
+renderers[6].SetBackground(0.4, 0.4, 0.4)
+renderers[2].SetBackground(0.3, 0.3, 0.3)
+renderers[5].SetBackground(0.3, 0.3, 0.3)  # Neutral background for MRI frames
 
 # === Initialize Visualizations ===
-# New 0: Walking legs from Current 0 (no heart animation)
+# New 0: Walking legs
 walking_legs_state, o2_curves = initialize_walking_legs(renderers[0])
 o2vas_values, o2mus_values = o2_curves
 
-# New 1: Current 1 (field visualization)
+# New 1: Field visualization
 field_vis_state = initialize_field_visualization(renderers[1], fields)
 
-# New 2: Heart animation from Current 0
+# New 2: Heart animation
 heart_actor, heart_files = initialize_heart(renderers[2])
 
-# New 3: Current 3 (o2vas, o2mus curves)
+# New 3: O2vas, o2mus curves
 WALKING_NUM_TIMESTEPS = len(o2vas_values)
 display_curves([o2vas_values, o2mus_values], [(1, 0, 0), (0, 0, 1)], renderers[3], 0)
 
-# New 4: Current 2 (pulse curves)
+# New 4: Pulse curves
 curve_fields = ["pressure", "flow", "wss", "area", "Re"]
 curve_values = []
 for k in range(point_slider_max + 1):
@@ -100,10 +101,11 @@ for k in range(point_slider_max + 1):
             entry[field].append((i, y))
     curve_values.append(entry)
 
-# New 5: Empty (no content)
+# New 5: MRI frames animation
+mri_actor, mri_files = initialize_image_animation(renderers[5], "MRI_frames", "frame_0*.png")
 
-# New 6: Current 4 (controller: sliders, menus)
-# (Sliders and menus initialized below)
+# New 6: Controller (sliders, menus)
+# (Initialized below)
 
 # === Add Labels ===
 def add_label(text, renderer, x, y):
@@ -118,6 +120,7 @@ def add_label(text, renderer, x, y):
 
 add_label("O2 Curves", renderers[3], 0.02, 0.94)
 add_label("Pulse Curves", renderers[4], 0.02, 0.94)
+add_label("MRI Frames", renderers[5], 0.02, 0.94)
 
 # === Setup Menus ===
 menu_configs = [
@@ -126,21 +129,21 @@ menu_configs = [
         "options": ["Roaming", "Walking", "Running"],
         "default": "Walking",
         "position": (0.02, 0.94, 0.04),
-        "font_size": 12  # Smaller font size for Renderer 0
+        "font_size": 12
     },
     {
         "renderer": renderers[1],
         "options": ["Pressure", "Flow", "WSS", "Area", "Re"],
         "default": "pressure",
         "position": (0.02, 0.94, 0.04),
-        "font_size": 12  # Smaller font size for Renderer 1
+        "font_size": 12
     },
     {
         "renderer": renderers[6],
         "options": ["Record 10s", "Record 30s"],
         "default": None,
         "position": (0.02, 0.18, 0.12),
-        "font_size": 18  # Original font size for Renderer 6
+        "font_size": 18
     }
 ]
 
@@ -266,8 +269,8 @@ def load_frame(idx):
         _curve_values = [curve_values[ipoint][field], curve_values[ipoint2][field]]
         pulse_step = int(slider_pulse.GetValue())
         walking_step = int(slider_foot.GetValue())
-        display_curves(_curve_values, [(1, 0, 0), (0, 0, 1)], renderers[4], pulse_step)  # New 4 (Current 2)
-        display_curves([o2vas_values, o2mus_values], [(1, 0, 0), (0, 0, 1)], renderers[3], walking_step)  # New 3 (Current 3)
+        display_curves(_curve_values, [(1, 0, 0), (0, 0, 1)], renderers[4], pulse_step)
+        display_curves([o2vas_values, o2mus_values], [(1, 0, 0), (0, 0, 1)], renderers[3], walking_step)
         renderers[4].ResetCamera()
         renderers[3].ResetCamera()
         ren_win.Render()
@@ -294,7 +297,8 @@ def timer_callback(obj, event):
     try:
         load_frame(step)
         update_walking_legs(walking_legs_state, walking_step)
-        update_heart(walking_step, heart_actor, heart_files, renderers[2])  # Update heart in New 2
+        update_heart(walking_step, heart_actor, heart_files, renderers[2])
+        update_image_animation(walking_step, mri_actor, mri_files, renderers[5])  # Update MRI frames in New 5
     except Exception as e:
         print(f"Error in timer_callback: {e}")
     ren_win.Render()
