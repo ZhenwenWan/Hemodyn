@@ -6,6 +6,7 @@ import cv2
 from vtk.util.numpy_support import numpy_to_vtk, vtk_to_numpy
 
 def ManualPolyData():
+    """Create a polygonal outline for visualization."""
     points = vtk.vtkPoints()
     cells = vtk.vtkCellArray()
     
@@ -35,6 +36,7 @@ def ManualPolyData():
     return polydata
 
 def initialize_beatingheart(renderer):
+    """Initialize heart animation in the specified renderer."""
     folder = "youtube_frames"
     file_pattern = os.path.join(folder, "frame_0*.png")
     files = sorted(glob.glob(file_pattern))
@@ -71,24 +73,11 @@ def initialize_beatingheart(renderer):
     texture.SetInputData(image_data)
     texture.InterpolateOn()
 
-    # Create a plane to display the texture
-    viewport_xmin, viewport_ymin, viewport_xmax, viewport_ymax = 0.0, 0.2, 0.333, 1.0
-    viewport_width = viewport_xmax - viewport_xmin  # 0.333
-    viewport_height = viewport_ymax - viewport_ymin  # 0.8
-
-    # Size: 20% of viewport width and height, 1:1 ratio
-    image_size = 0.2 * viewport_width  # 0.0666
-
-    # Position: 2% offset from bottom-left of viewport
-    offset_x = 0.02 * viewport_width  # 0.00666
-    offset_y = 0.02 * viewport_height  # 0.016
-    pos_x = viewport_xmin + offset_x  # 0.00666
-    pos_y = viewport_ymin + offset_y  # 0.216
-
+    # Create a plane in normalized viewport coordinates for Renderer 2 (0.666-1.0, 0.6-1.0)
     plane = vtk.vtkPlaneSource()
-    plane.SetOrigin(pos_x, pos_y, 0)
-    plane.SetPoint1(pos_x + image_size, pos_y, 0)
-    plane.SetPoint2(pos_x, pos_y + image_size, 0)
+    plane.SetOrigin(0.676, 0.61, 0)  # 2% offset from bottom-left of Renderer 2
+    plane.SetPoint1(1.0, 0.61, 0)    # Width: ~0.333 (viewport width)
+    plane.SetPoint2(0.676, 0.943, 0) # Height: ~0.333 (viewport height)
     plane.Update()
 
     # Set texture coordinates
@@ -115,6 +104,7 @@ def initialize_beatingheart(renderer):
     return actor, files
 
 def update_heart(index, heart_actor, heart_files, renderer):
+    """Update heart animation with the next PNG frame."""
     if not heart_actor or not heart_files:
         return
 
@@ -148,7 +138,8 @@ def update_heart(index, heart_actor, heart_files, renderer):
     heart_actor.Modified()
     print(f"Updated heart image with file: {heart_files[file_index]}")
 
-def initialize_walking_legs(renderer):
+def initialize_walking_legs(renderer, include_heart=False):
+    """Initialize walking legs visualization in the specified renderer, optionally with heart animation."""
     folder = "../CFD/modelFrame03"
     file_pattern = os.path.join(folder, "case_t*.vtu")
     files = sorted(glob.glob(file_pattern))
@@ -273,9 +264,9 @@ def initialize_walking_legs(renderer):
     o2_bar.SetLookupTable(lut_o2)
     o2_bar.SetNumberOfLabels(3)
     o2_bar.SetOrientationToHorizontal()
-    o2_bar.SetPosition(0.01, 0.02)
-    o2_bar.SetWidth(0.96)
-    o2_bar.SetHeight(0.04)
+    o2_bar.SetPosition(0.05, 0.02)
+    o2_bar.SetWidth(0.9)
+    o2_bar.SetHeight(0.08)
     o2_bar.Modified()
     renderer.AddActor2D(o2_bar)
 
@@ -286,7 +277,12 @@ def initialize_walking_legs(renderer):
     text_actor.SetPosition(0.80, 0.90)
     renderer.AddActor2D(text_actor)
 
-    # Extract O2Vas and O2Mus Curves for Renderer 3
+    # Initialize heart animation if included
+    heart_actor, heart_files = None, []
+    if include_heart:
+        heart_actor, heart_files = initialize_beatingheart(renderer)
+
+    # Extract O2Vas and O2Mus Curves for Renderer 3 (New 3)
     o2vas_values = []
     o2mus_values = []
     reader.SetFileName(files[0])
@@ -333,10 +329,6 @@ def initialize_walking_legs(renderer):
         else:
             o2mus_values = [(i, 0.0) for i, v in enumerate(o2mus_values)]
 
-    # Initialize heart animation for Renderer 0
-    heart_actor, heart_files = initialize_beatingheart(renderer)
-    heart_index = 0
-
     state = {
         'renderer': renderer,
         'files': files,
@@ -361,13 +353,13 @@ def initialize_walking_legs(renderer):
         'frames_period': 50,
         'a_vec': np.array([0.05, 0.05, 0.05]),
         'heart_actor': heart_actor,
-        'heart_files': heart_files,
-        'heart_index': heart_index
+        'heart_files': heart_files
     }
 
     return state, [o2vas_values, o2mus_values]
 
 def project_onto_leg_motion(index, coords, velocity_array, phase_offset=0.0, frames_period=50, contract_y=False):
+    """Apply leg motion transformation to coordinates and velocities."""
     if contract_y:
         coords = coords.copy()
         coords[:, 1] *= 0.1
@@ -417,6 +409,7 @@ def project_onto_leg_motion(index, coords, velocity_array, phase_offset=0.0, fra
     return np.array(new_coords), np.array(rotated_velocity)
 
 def update_walking_legs(state, index):
+    """Update walking legs visualization and heart animation if included."""
     files = state['files']
     reader = state['reader']
     renderer = state['renderer']
@@ -437,13 +430,12 @@ def update_walking_legs(state, index):
     o2mus_actor2 = state['o2mus_actor2']
     text_actor = state['text_actor']
     frames_period = state['frames_period']
-    heart_actor = state['heart_actor']
-    heart_files = state['heart_files']
-    heart_index = state['heart_index']
+    heart_actor = state.get('heart_actor')
+    heart_files = state.get('heart_files')
 
-    # Update heart animation in Renderer 0
+    # Update heart animation if included (not used for New 0)
     if heart_actor and heart_files:
-        state['heart_index'] = (heart_index + 1) % len(heart_files)
+        state['heart_index'] = (state.get('heart_index', 0) + 1) % len(heart_files)
         update_heart(state['heart_index'], heart_actor, heart_files, renderer)
 
     if not files:
@@ -565,7 +557,8 @@ def update_walking_legs(state, index):
 
     if o2mus_array:
         o2mus_np2 = vtk_to_numpy(o2mus_array)
-        o2mus_clamped2 = np.clip(o2mus_np2, o2mus_min, o2mus_max)
+        o2mus_min2, o2mus_max2 = np.percentile(o2mus_np2, [0, 100])
+        o2mus_clamped2 = np.clip(o2mus_np2, o2mus_min2, o2mus_max2)
         o2mus_vtk2 = numpy_to_vtk(o2mus_clamped2, deep=True)
         o2mus_vtk2.SetName("o2mus")
         poly_data_mus2.GetPointData().AddArray(o2mus_vtk2)
@@ -585,8 +578,3 @@ def update_walking_legs(state, index):
     mapper2.SetInputData(glyph2.GetOutput())
     mapper2.Update()
     actor2.Modified()
-
-    # Avoid camera reset to maintain heart animation viewport
-    # if index == 0:
-    #     renderer.ResetCamera()
-

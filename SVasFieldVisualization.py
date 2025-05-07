@@ -15,9 +15,9 @@ def initialize_field_visualization(renderer, fields):
     scalar_bar.SetLookupTable(lut)
     scalar_bar.SetNumberOfLabels(3)
     scalar_bar.SetOrientationToHorizontal()
-    scalar_bar.SetPosition(0.01, 0.02)
-    scalar_bar.SetWidth(0.96)
-    scalar_bar.SetHeight(0.04)
+    scalar_bar.SetPosition(0.05, 0.02)
+    scalar_bar.SetWidth(0.9)
+    scalar_bar.SetHeight(0.08)
     scalar_bar.Modified()
     renderer.AddActor2D(scalar_bar)
 

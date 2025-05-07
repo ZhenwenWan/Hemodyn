@@ -10,6 +10,9 @@ from SVasVideo import SVasVideo
 import SVasWalkingLegsFunctions
 importlib.reload(SVasWalkingLegsFunctions)
 from SVasWalkingLegsFunctions import initialize_walking_legs, update_walking_legs
+import SVasHeartFunctions
+importlib.reload(SVasHeartFunctions)
+from SVasHeartFunctions import initialize_heart, update_heart
 import SVasSliderUtils
 importlib.reload(SVasSliderUtils)
 from SVasSliderUtils import create_slider_widget
@@ -49,30 +52,42 @@ ren_win.SetSize(*WINDOW_SIZE)
 
 renderers = []
 viewport_configs = [
-    (0.0, 0.2, 0.333, 1.0),  # Renderer 0: Walking Legs
-    (0.333, 0.2, 0.667, 1.0),  # Renderer 1: Selected Field
-    (0.667, 0.6, 1.0, 1.0),  # Renderer 2: Pulse Curves
-    (0.667, 0.2, 1.0, 0.6),  # Renderer 3: O2Vas and O2Mus Curves
-    (0.0, 0.0, 1.0, 0.2)  # Renderer 4: Controller
+    (0.0, 0.6, 0.333, 1.0),     # New 0: Walking legs (Current 0, no heart)
+    (0.333, 0.6, 0.666, 1.0),   # New 1: Current 1 (field visualization)
+    (0.666, 0.6, 1.0, 1.0),     # New 2: Heart animation (from Current 0)
+    (0.0, 0.2, 0.333, 0.6),     # New 3: Current 3 (o2vas, o2mus curves)
+    (0.333, 0.2, 0.666, 0.6),   # New 4: Current 2 (pulse curves)
+    (0.666, 0.2, 1.0, 0.6),     # New 5: Empty
+    (0.0, 0.0, 1.0, 0.2)        # New 6: Current 4 (controller)
 ]
 
 for idx, viewport in enumerate(viewport_configs):
     ren = vtk.vtkRenderer()
     ren.SetViewport(viewport)
-    shade = 0.45 + 0.05 * idx / 5.0
+    shade = 0.45 + 0.05 * idx / 7.0  # Gradient for distinction
     ren.SetBackground(shade, shade, shade)
     ren_win.AddRenderer(ren)
     renderers.append(ren)
 
-renderers[4].SetBackground(0.4, 0.4, 0.4)
+renderers[6].SetBackground(0.4, 0.4, 0.4)  # Match original controller background
+renderers[2].SetBackground(0.3, 0.3, 0.3)  # Ensure neutral background for heart colors
 
 # === Initialize Visualizations ===
+# New 0: Walking legs from Current 0 (no heart animation)
 walking_legs_state, o2_curves = initialize_walking_legs(renderers[0])
 o2vas_values, o2mus_values = o2_curves
-field_vis_state = initialize_field_visualization(renderers[1], fields)
-WALKING_NUM_TIMESTEPS =len(o2vas_values) 
 
-# === Initialize Curve Data for Renderer 2 ===
+# New 1: Current 1 (field visualization)
+field_vis_state = initialize_field_visualization(renderers[1], fields)
+
+# New 2: Heart animation from Current 0
+heart_actor, heart_files = initialize_heart(renderers[2])
+
+# New 3: Current 3 (o2vas, o2mus curves)
+WALKING_NUM_TIMESTEPS = len(o2vas_values)
+display_curves([o2vas_values, o2mus_values], [(1, 0, 0), (0, 0, 1)], renderers[3], 0)
+
+# New 4: Current 2 (pulse curves)
 curve_fields = ["pressure", "flow", "wss", "area", "Re"]
 curve_values = []
 for k in range(point_slider_max + 1):
@@ -85,6 +100,11 @@ for k in range(point_slider_max + 1):
             entry[field].append((i, y))
     curve_values.append(entry)
 
+# New 5: Empty (no content)
+
+# New 6: Current 4 (controller: sliders, menus)
+# (Sliders and menus initialized below)
+
 # === Add Labels ===
 def add_label(text, renderer, x, y):
     label = vtk.vtkTextActor()
@@ -96,8 +116,8 @@ def add_label(text, renderer, x, y):
     renderer.AddActor2D(label)
     return label
 
-add_label("Pulse Curves", renderers[2], 0.02, 0.94)
 add_label("O2 Curves", renderers[3], 0.02, 0.94)
+add_label("Pulse Curves", renderers[4], 0.02, 0.94)
 
 # === Setup Menus ===
 menu_configs = [
@@ -105,19 +125,22 @@ menu_configs = [
         "renderer": renderers[0],
         "options": ["Roaming", "Walking", "Running"],
         "default": "Walking",
-        "position": (0.02, 0.94, 0.04)
+        "position": (0.02, 0.94, 0.04),
+        "font_size": 12  # Smaller font size for Renderer 0
     },
     {
         "renderer": renderers[1],
         "options": ["Pressure", "Flow", "WSS", "Area", "Re"],
         "default": "pressure",
-        "position": (0.02, 0.94, 0.04)
+        "position": (0.02, 0.94, 0.04),
+        "font_size": 12  # Smaller font size for Renderer 1
     },
     {
-        "renderer": renderers[4],
+        "renderer": renderers[6],
         "options": ["Record 10s", "Record 30s"],
         "default": None,
-        "position": (0.02, 0.18, 0.12)
+        "position": (0.02, 0.18, 0.12),
+        "font_size": 18  # Original font size for Renderer 6
     }
 ]
 
@@ -128,14 +151,15 @@ for config in menu_configs:
         config["renderer"],
         config["options"],
         config["default"],
-        config["position"]
+        config["position"],
+        font_size=config.get("font_size", 18)
     )
     menu_actors_dict[config["renderer"]] = actors
     selected_options[config["renderer"]] = selected
 
 selected_mode = selected_options[renderers[0]]
 selected_field = selected_options[renderers[1]]
-selected_record = selected_options[renderers[4]]
+selected_record = selected_options[renderers[6]]
 
 # === Animation State ===
 step = 0
@@ -145,7 +169,7 @@ is_animating = False
 # === Video Recording ===
 def start_video_recording():
     duration = 30 if selected_record == "Record 30s" else 10
-    SVasVideo(ren_win, menu_actors_dict[renderers[4]], selected_record, interactor, duration)
+    SVasVideo(ren_win, menu_actors_dict[renderers[6]], selected_record, interactor, duration)
 
 # === Interactor Setup ===
 interactor = vtk.vtkRenderWindowInteractor()
@@ -156,13 +180,13 @@ def menu_interaction_callback(obj, event):
     global selected_mode, selected_field, selected_record
     selected_options[renderers[0]] = selected_mode
     selected_options[renderers[1]] = selected_field
-    selected_options[renderers[4]] = selected_record
+    selected_options[renderers[6]] = selected_record
     new_selections = handle_menu_interaction(
         obj, event, ren_win, interactor, menu_configs, menu_actors_dict, selected_options
     )
     selected_mode = new_selections[renderers[0]]
     selected_field = new_selections[renderers[1]]
-    selected_record = new_selections[renderers[4]]
+    selected_record = new_selections[renderers[6]]
     if event == "LeftButtonPressEvent" and selected_record:
         start_video_recording()
     if event == "LeftButtonPressEvent" and (0.333 <= obj.GetEventPosition()[0] / ren_win.GetSize()[0] <= 0.667):
@@ -184,7 +208,7 @@ slider_point, widget_point = create_slider_widget(
     x1_pos=0.68,
     x2_pos=0.98,
     y_pos=0.155,
-    slider_color=(1, 0, 0)  # Red
+    slider_color=(1, 0, 0)
 )
 
 slider_point2, widget_point2 = create_slider_widget(
@@ -195,7 +219,7 @@ slider_point2, widget_point2 = create_slider_widget(
     x1_pos=0.68,
     x2_pos=0.98,
     y_pos=0.105,
-    slider_color=(0, 0, 1)  # Blue
+    slider_color=(0, 0, 1)
 )
 
 slider_pulse, widget_timer = create_slider_widget(
@@ -242,9 +266,9 @@ def load_frame(idx):
         _curve_values = [curve_values[ipoint][field], curve_values[ipoint2][field]]
         pulse_step = int(slider_pulse.GetValue())
         walking_step = int(slider_foot.GetValue())
-        display_curves(_curve_values, [(1,0,0),(0,0,1)], renderers[2], pulse_step)
-        display_curves([o2vas_values, o2mus_values], [(1,0,0),(0,0,1)], renderers[3], walking_step)
-        renderers[2].ResetCamera()
+        display_curves(_curve_values, [(1, 0, 0), (0, 0, 1)], renderers[4], pulse_step)  # New 4 (Current 2)
+        display_curves([o2vas_values, o2mus_values], [(1, 0, 0), (0, 0, 1)], renderers[3], walking_step)  # New 3 (Current 3)
+        renderers[4].ResetCamera()
         renderers[3].ResetCamera()
         ren_win.Render()
     except Exception as e:
@@ -270,6 +294,7 @@ def timer_callback(obj, event):
     try:
         load_frame(step)
         update_walking_legs(walking_legs_state, walking_step)
+        update_heart(walking_step, heart_actor, heart_files, renderers[2])  # Update heart in New 2
     except Exception as e:
         print(f"Error in timer_callback: {e}")
     ren_win.Render()
@@ -283,4 +308,3 @@ interactor.Initialize()
 ren_win.Render()
 interactor.CreateRepeatingTimer(FRAME_RATES[selected_mode][0])
 interactor.Start()
-
