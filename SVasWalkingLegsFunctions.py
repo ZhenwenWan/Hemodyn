@@ -35,109 +35,6 @@ def ManualPolyData():
     
     return polydata
 
-def initialize_beatingheart(renderer):
-    """Initialize heart animation in the specified renderer."""
-    folder = "youtube_frames"
-    file_pattern = os.path.join(folder, "frame_0*.png")
-    files = sorted(glob.glob(file_pattern))
-    print(f"Found {len(files)} heart animation files")
-
-    if not files:
-        print("Warning: No PNG files found for heart animation")
-        return None, []
-
-    # Load initial PNG image with cv2
-    image = cv2.imread(files[0])
-    if image is None:
-        print(f"Warning: Failed to load PNG {files[0]}")
-        return None, []
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
-    image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_AREA)
-    image = np.flipud(image)  # Flip vertically to match VTK's coordinate system
-    height, width, channels = image.shape
-    if channels != 3:
-        print(f"Warning: PNG {files[0]} is not RGB (channels={channels})")
-        return None, []
-
-    # Create VTK image data for texture
-    image_data = vtk.vtkImageData()
-    image_data.SetDimensions(width, height, 1)
-    image_data.SetSpacing(1, 1, 1)
-    image_data.SetOrigin(0, 0, 0)
-    image_data.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 3)
-    vtk_array = numpy_to_vtk(image.ravel(), deep=True)
-    image_data.GetPointData().SetScalars(vtk_array)
-
-    # Create texture
-    texture = vtk.vtkTexture()
-    texture.SetInputData(image_data)
-    texture.InterpolateOn()
-
-    # Create a plane in normalized viewport coordinates for Renderer 2 (0.666-1.0, 0.6-1.0)
-    plane = vtk.vtkPlaneSource()
-    plane.SetOrigin(0.676, 0.61, 0)  # 2% offset from bottom-left of Renderer 2
-    plane.SetPoint1(1.0, 0.61, 0)    # Width: ~0.333 (viewport width)
-    plane.SetPoint2(0.676, 0.943, 0) # Height: ~0.333 (viewport height)
-    plane.Update()
-
-    # Set texture coordinates
-    texture_coords = vtk.vtkFloatArray()
-    texture_coords.SetNumberOfComponents(2)
-    texture_coords.SetNumberOfTuples(4)
-    texture_coords.SetTuple2(0, 0, 0)  # Bottom-left
-    texture_coords.SetTuple2(1, 1, 0)  # Bottom-right
-    texture_coords.SetTuple2(2, 1, 1)  # Top-right
-    texture_coords.SetTuple2(3, 0, 1)  # Top-left
-    plane.GetOutput().GetPointData().SetTCoords(texture_coords)
-
-    # Create mapper and actor
-    mapper = vtk.vtkPolyDataMapper()
-    mapper.SetInputConnection(plane.GetOutputPort())
-
-    actor = vtk.vtkActor()
-    actor.SetMapper(mapper)
-    actor.SetTexture(texture)
-    actor.GetProperty().SetOpacity(1.0)
-
-    renderer.AddActor(actor)
-    print("Heart actor added to renderer")
-    return actor, files
-
-def update_heart(index, heart_actor, heart_files, renderer):
-    """Update heart animation with the next PNG frame."""
-    if not heart_actor or not heart_files:
-        return
-
-    file_index = index % len(heart_files)
-    image = cv2.imread(heart_files[file_index])
-    if image is None:
-        print(f"Warning: Failed to load PNG {heart_files[file_index]}")
-        return
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_AREA)
-    image = np.flipud(image)
-    height, width, channels = image.shape
-    if channels != 3:
-        print(f"Warning: PNG {heart_files[file_index]} is not RGB (channels={channels})")
-        return
-
-    # Create VTK image data for texture
-    image_data = vtk.vtkImageData()
-    image_data.SetDimensions(width, height, 1)
-    image_data.SetSpacing(1, 1, 1)
-    image_data.SetOrigin(0, 0, 0)
-    image_data.AllocateScalars(vtk.VTK_UNSIGNED_CHAR, 3)
-    vtk_array = numpy_to_vtk(image.ravel(), deep=True)
-    image_data.GetPointData().SetScalars(vtk_array)
-
-    # Update texture
-    texture = vtk.vtkTexture()
-    texture.SetInputData(image_data)
-    texture.InterpolateOn()
-    heart_actor.SetTexture(texture)
-    heart_actor.Modified()
-    print(f"Updated heart image with file: {heart_files[file_index]}")
-
 def initialize_walking_legs(renderer, include_heart=False):
     """Initialize walking legs visualization in the specified renderer, optionally with heart animation."""
     folder = "../CFD/modelFrame03"
@@ -270,17 +167,22 @@ def initialize_walking_legs(renderer, include_heart=False):
     o2_bar.Modified()
     renderer.AddActor2D(o2_bar)
 
+    o2mus_bar = vtk.vtkScalarBarActor()
+    o2mus_bar.SetLookupTable(lut_o2mus)
+    o2mus_bar.SetNumberOfLabels(3)
+    o2mus_bar.SetOrientationToHorizontal()
+    o2mus_bar.SetPosition(0.05, 0.11)
+    o2mus_bar.SetWidth(0.9)
+    o2mus_bar.SetHeight(0.08)
+    o2mus_bar.Modified()
+    renderer.AddActor2D(o2mus_bar)
+
     text_actor = vtk.vtkTextActor()
     text_actor.GetTextProperty().SetFontSize(10)
     text_actor.GetTextProperty().SetColor(1, 1, 1)
     text_actor.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
     text_actor.SetPosition(0.80, 0.90)
     renderer.AddActor2D(text_actor)
-
-    # Initialize heart animation if included
-    heart_actor, heart_files = None, []
-    if include_heart:
-        heart_actor, heart_files = initialize_beatingheart(renderer)
 
     # Extract O2Vas and O2Mus Curves for Renderer 3 (New 3)
     o2vas_values = []
@@ -351,9 +253,7 @@ def initialize_walking_legs(renderer, include_heart=False):
         'text_actor': text_actor,
         'current_index': 0,
         'frames_period': 50,
-        'a_vec': np.array([0.05, 0.05, 0.05]),
-        'heart_actor': heart_actor,
-        'heart_files': heart_files
+        'a_vec': np.array([0.05, 0.05, 0.05])
     }
 
     return state, [o2vas_values, o2mus_values]
@@ -430,13 +330,6 @@ def update_walking_legs(state, index):
     o2mus_actor2 = state['o2mus_actor2']
     text_actor = state['text_actor']
     frames_period = state['frames_period']
-    heart_actor = state.get('heart_actor')
-    heart_files = state.get('heart_files')
-
-    # Update heart animation if included (not used for New 0)
-    if heart_actor and heart_files:
-        state['heart_index'] = (state.get('heart_index', 0) + 1) % len(heart_files)
-        update_heart(state['heart_index'], heart_actor, heart_files, renderer)
 
     if not files:
         text_actor.SetInput("Error: No VTU files found in modelFrame03")
@@ -527,7 +420,7 @@ def update_walking_legs(state, index):
         o2_vtk.SetName("o2vas")
         poly_data.GetPointData().AddArray(o2_vtk)
         o2_mapper.SetInputData(poly_data)
-        o2_mapper.SetScalarRange(50, 70)
+        o2_mapper.SetScalarRange(int(o2_vtk.GetRange()[0]), int(o2_vtk.GetRange()[1]))
         o2_mapper.Update()
         o2_actor.Modified()
 
@@ -538,7 +431,7 @@ def update_walking_legs(state, index):
         o2_vtk2.SetName("o2vas")
         poly_data2.GetPointData().AddArray(o2_vtk2)
         o2_mapper2.SetInputData(poly_data2)
-        o2_mapper2.SetScalarRange(50, 70)
+        o2_mapper2.SetScalarRange(int(o2_vtk2.GetRange()[0]), int(o2_vtk2.GetRange()[1]))
         o2_mapper2.Update()
         o2_actor2.Modified()
 
@@ -551,7 +444,7 @@ def update_walking_legs(state, index):
         o2mus_vtk.SetName("o2mus")
         poly_data_mus.GetPointData().AddArray(o2mus_vtk)
         o2mus_mapper.SetInputData(poly_data_mus)
-        o2mus_mapper.SetScalarRange(50, 70)
+        o2mus_mapper.SetScalarRange(int(o2mus_vtk.GetRange()[0]), int(o2mus_vtk.GetRange()[1]))
         o2mus_mapper.Update()
         o2mus_actor.Modified()
 
@@ -563,7 +456,7 @@ def update_walking_legs(state, index):
         o2mus_vtk2.SetName("o2mus")
         poly_data_mus2.GetPointData().AddArray(o2mus_vtk2)
         o2mus_mapper2.SetInputData(poly_data_mus2)
-        o2mus_mapper2.SetScalarRange(50, 70)
+        o2mus_mapper2.SetScalarRange(int(o2mus_vtk2.GetRange()[0]), int(o2mus_vtk2.GetRange()[1]))
         o2mus_mapper2.Update()
         o2mus_actor2.Modified()
 
