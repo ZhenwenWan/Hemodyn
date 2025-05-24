@@ -37,7 +37,7 @@ def ManualPolyData():
 
 def initialize_walking_legs(renderer, include_heart=False):
     """Initialize walking legs visualization in the specified renderer, optionally with heart animation."""
-    folder = "../CFD/modelFrame03"
+    folder = "modelFrame03"
     file_pattern = os.path.join(folder, "case_t*.vtu")
     files = sorted(glob.glob(file_pattern))
 
