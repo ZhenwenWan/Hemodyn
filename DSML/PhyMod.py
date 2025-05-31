@@ -84,7 +84,7 @@ class DOModel1D:
                     metabolic_rates[i] = 0.0
                 else:
                     metabolic_rates[i] = self.metabolism_rate * \
-                                         (DO_val - self.DO_mus_zero) / (DO_mus_full - self.DO_mus_zero)
+                                         (DO_val - self.DO_mus_zero) / (self.DO_mus_full - self.DO_mus_zero)
             metabolic_consumption = -metabolic_rates * DO_muscular
 
             DO_muscular += self.dt * (diffusive_flux_musc + exchange_flux_musc + metabolic_consumption)
@@ -235,8 +235,8 @@ def main():
     model.set_conditions(
         D_vascular=0.1,
         D_muscular=0.05,
-        exchange_rate=0.01,
-        metabolism_rate=0.02,
+        exchange_rate=0.1,
+        metabolism_rate=0.2,
         Oi=1.0,
         Qi_scenario='decrease',  # Options: 'constant', 'decrease', 'increase'
         Qi_initial=1.0,
