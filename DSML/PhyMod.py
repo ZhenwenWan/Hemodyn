@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import vtk
 from vtk.util import numpy_support
 
@@ -23,7 +22,7 @@ class DOModel1D:
         self.exchange_rate = 0.01
         self.metabolism_rate = 0.02
         self.Oi = 1.0  # Inlet DO concentration
-        self.DO_mus_zero = 0.4  # DO thredhold for motion
+        self.DO_mus_zero = 0.4  # DO threshold for motion
         self.DO_mus_full = 0.8  # DO for full motion
         
         # Qi scenarios
@@ -57,7 +56,11 @@ class DOModel1D:
         
         times = np.arange(0, self.total_time, self.dt)
         Qi_values = self._generate_Qi(times)
-
+        
+        # Store results for all time steps
+        DO_vascular_all = np.zeros((len(times), self.nx))
+        DO_muscular_all = np.zeros((len(times), self.nx))
+        
         for t_idx, t in enumerate(times):
             Qi = Qi_values[t_idx]
             
@@ -81,7 +84,7 @@ class DOModel1D:
                     metabolic_rates[i] = 0.0
                 else:
                     metabolic_rates[i] = self.metabolism_rate * \
-                                         (DO_val - self.DO_mus_zero) / (self.DO_mus_full - self.DO_mus_zero)
+                                         (DO_val - self.DO_mus_zero) / (DO_mus_full - self.DO_mus_zero)
             metabolic_consumption = -metabolic_rates * DO_muscular
 
             DO_muscular += self.dt * (diffusive_flux_musc + exchange_flux_musc + metabolic_consumption)
@@ -91,8 +94,12 @@ class DOModel1D:
             DO_vascular[-1] = DO_vascular[-2]  # Neumann BC
             DO_muscular[0] = DO_muscular[1]    # Neumann BC
             DO_muscular[-1] = DO_muscular[-2]
+            
+            # Store results
+            DO_vascular_all[t_idx, :] = DO_vascular.copy()
+            DO_muscular_all[t_idx, :] = DO_muscular.copy()
 
-        return self.x, DO_vascular, DO_muscular
+        return self.x, times, DO_vascular_all, DO_muscular_all
 
     def _generate_Qi(self, times):
         if self.Qi_scenario == 'constant':
@@ -105,55 +112,119 @@ class DOModel1D:
             raise ValueError(f"Unknown Qi scenario: {self.Qi_scenario}")
 
 
-def visualize_vtk(x, DO_vascular, DO_muscular):
+def visualize_vtk(x, times, DO_vascular_all, DO_muscular_all):
     """
-    Visualize the final DO distribution in both compartments using VTK.
+    Visualize the DO distribution in four renderers:
+    - Renderer 0: 2D DO_vascular (x vs time)
+    - Renderer 1: 2D DO_muscular (x vs time)
+    - Renderer 2: 1D DO_vascular vs DO_muscular (last step)
+    - Renderer 3: 1D DO_vascular vs DO_muscular at x=nx/2 over time
     """
-    points = vtk.vtkPoints()
-    for xi in x:
-        points.InsertNextPoint(xi, 0, 0)
-
-    # Create PolyLine
-    lines = vtk.vtkCellArray()
-    polyLine = vtk.vtkPolyLine()
-    polyLine.GetPointIds().SetNumberOfIds(len(x))
-    for i in range(len(x)):
-        polyLine.GetPointIds().SetId(i, i)
-    lines.InsertNextCell(polyLine)
-
-    # Create PolyData
-    polyData = vtk.vtkPolyData()
-    polyData.SetPoints(points)
-    polyData.SetLines(lines)
-
-    # Add DO_vascular as scalar data
-    DO_vasc_array = numpy_support.numpy_to_vtk(DO_vascular, deep=True)
-    DO_vasc_array.SetName("DO_vascular")
-    polyData.GetPointData().AddArray(DO_vasc_array)
-    polyData.GetPointData().SetActiveScalars("DO_vascular")
-
-    # Visualize
-    mapper = vtk.vtkPolyDataMapper()
-    mapper.SetInputData(polyData)
-    mapper.SetScalarModeToUsePointData()
-    mapper.ScalarVisibilityOn()
-
-    actor = vtk.vtkActor()
-    actor.SetMapper(mapper)
-
-    # Renderer
-    renderer = vtk.vtkRenderer()
-    renderer.AddActor(actor)
-    renderer.SetBackground(0.1, 0.2, 0.3)
-
-    # Render window
+    # Initialize render window and renderers
     renderWindow = vtk.vtkRenderWindow()
-    renderWindow.AddRenderer(renderer)
+    renderers = [vtk.vtkRenderer() for _ in range(4)]
+    
+    # Set viewport for each renderer (2x2 grid)
+    renderers[0].SetViewport(0.0, 0.5, 0.5, 1.0)  # Top-left
+    renderers[1].SetViewport(0.5, 0.5, 1.0, 1.0)  # Top-right
+    renderers[2].SetViewport(0.0, 0.0, 0.5, 0.5)  # Bottom-left
+    renderers[3].SetViewport(0.5, 0.0, 1.0, 0.5)  # Bottom-right
+    
+    for renderer in renderers:
+        renderWindow.AddRenderer(renderer)
+        renderer.SetBackground(0.1, 0.2, 0.3)
 
-    # Interactor
+    # Renderer 0: 2D DO_vascular (x vs time)
+    points_vasc = vtk.vtkPoints()
+    for t_idx, t in enumerate(times):
+        for x_idx, xi in enumerate(x):
+            points_vasc.InsertNextPoint(xi, t, DO_vascular_all[t_idx, x_idx])
+    
+    grid_vasc = vtk.vtkStructuredGrid()
+    grid_vasc.SetDimensions(len(x), len(times), 1)
+    grid_vasc.SetPoints(points_vasc)
+    
+    mapper_vasc = vtk.vtkDataSetMapper()
+    mapper_vasc.SetInputData(grid_vasc)
+    mapper_vasc.ScalarVisibilityOff()
+    
+    actor_vasc = vtk.vtkActor()
+    actor_vasc.SetMapper(mapper_vasc)
+    renderers[0].AddActor(actor_vasc)
+
+    # Renderer 1: 2D DO_muscular (x vs time)
+    points_musc = vtk.vtkPoints()
+    for t_idx, t in enumerate(times):
+        for x_idx, xi in enumerate(x):
+            points_musc.InsertNextPoint(xi, t, DO_muscular_all[t_idx, x_idx])
+    
+    grid_musc = vtk.vtkStructuredGrid()
+    grid_musc.SetDimensions(len(x), len(times), 1)
+    grid_musc.SetPoints(points_musc)
+    
+    mapper_musc = vtk.vtkDataSetMapper()
+    mapper_musc.SetInputData(grid_musc)
+    mapper_musc.ScalarVisibilityOff()
+    
+    actor_musc = vtk.vtkActor()
+    actor_musc.SetMapper(mapper_musc)
+    renderers[1].AddActor(actor_musc)
+
+    # Renderer 2: 1D DO_vascular vs DO_muscular (last step)
+    points_last = vtk.vtkPoints()
+    for x_idx in range(len(x)):
+        points_last.InsertNextPoint(DO_vascular_all[-1, x_idx], DO_muscular_all[-1, x_idx], 0)
+    
+    lines_last = vtk.vtkCellArray()
+    polyLine_last = vtk.vtkPolyLine()
+    polyLine_last.GetPointIds().SetNumberOfIds(len(x))
+    for i in range(len(x)):
+        polyLine_last.GetPointIds().SetId(i, i)
+    lines_last.InsertNextCell(polyLine_last)
+    
+    polyData_last = vtk.vtkPolyData()
+    polyData_last.SetPoints(points_last)
+    polyData_last.SetLines(lines_last)
+    
+    mapper_last = vtk.vtkPolyDataMapper()
+    mapper_last.SetInputData(polyData_last)
+    
+    actor_last = vtk.vtkActor()
+    actor_last.SetMapper(mapper_last)
+    renderers[2].AddActor(actor_last)
+
+    # Renderer 3: 1D DO_vascular vs DO_muscular at x=nx/2 over time
+    mid_idx = len(x) // 2
+    points_mid = vtk.vtkPoints()
+    for t_idx, t in enumerate(times):
+        points_mid.InsertNextPoint(DO_vascular_all[t_idx, mid_idx], DO_muscular_all[t_idx, mid_idx], 0)
+    
+    lines_mid = vtk.vtkCellArray()
+    polyLine_mid = vtk.vtkPolyLine()
+    polyLine_mid.GetPointIds().SetNumberOfIds(len(times))
+    for i in range(len(times)):
+        polyLine_mid.GetPointIds().SetId(i, i)
+    lines_mid.InsertNextCell(polyLine_mid)
+    
+    polyData_mid = vtk.vtkPolyData()
+    polyData_mid.SetPoints(points_mid)
+    polyData_mid.SetLines(lines_mid)
+    
+    mapper_mid = vtk.vtkPolyDataMapper()
+    mapper_mid.SetInputData(polyData_mid)
+    
+    actor_mid = vtk.vtkActor()
+    actor_mid.SetMapper(mapper_mid)
+    renderers[3].AddActor(actor_mid)
+
+    # Setup interactor
     renderWindowInteractor = vtk.vtkRenderWindowInteractor()
     renderWindowInteractor.SetRenderWindow(renderWindow)
-
+    
+    # Adjust camera for each renderer
+    for renderer in renderers:
+        renderer.ResetCamera()
+    
     renderWindow.Render()
     renderWindowInteractor.Start()
 
@@ -172,21 +243,10 @@ def main():
         Qi_final=0.5
     )
 
-    x, DO_vascular, DO_muscular = model.simulate()
-
-    # Plotting for quick check
-    plt.figure(figsize=(10,5))
-    plt.plot(x, DO_vascular, label='DO Vascular')
-    plt.plot(x, DO_muscular, label='DO Muscular')
-    plt.xlabel('Position (x)')
-    plt.ylabel('DO Concentration')
-    plt.legend()
-    plt.title('Dissolved Oxygen Distribution')
-    plt.grid(True)
-    plt.show()
+    x, times, DO_vascular_all, DO_muscular_all = model.simulate()
 
     # VTK visualization
-    visualize_vtk(x, DO_vascular, DO_muscular)
+    visualize_vtk(x, times, DO_vascular_all, DO_muscular_all)
 
 
 if __name__ == "__main__":
