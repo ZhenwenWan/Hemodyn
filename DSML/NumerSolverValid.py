@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 
 # Parameters
 nx = 100
@@ -7,7 +9,7 @@ nt = 100
 x = np.linspace(0, 1, nx)
 t = np.linspace(0, 1, nt)
 dx = x[1] - x[0]
-dt = 0.0001
+dt = 0.01
 
 # Parameter combinations
 param_combos = [(0.1, 0.1), (0.1, 0.5), (0.5, 0.1), (0.5, 0.5)]
@@ -22,6 +24,36 @@ def compute_f(u, x, alpha, beta, dx):
     for i in range(1, Nx - 1):
         f[i] = alpha * (u[i + 1] - 2 * u[i] + u[i - 1]) / (dx ** 2) + beta * np.sin(np.pi * x[i])
     return f
+
+def numerical_solution_implicit(x, t_output, alpha, beta, dx=0.01, dt=0.01):
+    Nx = len(x)
+    Nt = len(t_output)
+    u = np.zeros((Nt, Nx))
+    u[0, :] = np.sin(np.pi * x)
+    
+    # Define matrix A for Crank–Nicolson
+    r = alpha * dt / (dx ** 2)
+    main_diag = (1 + r) * np.ones(Nx - 2)
+    off_diag = (-r / 2) * np.ones(Nx - 3)
+    A = sp.diags([off_diag, main_diag, off_diag], offsets=[-1, 0, 1], format='csc')
+
+    B = sp.diags([r / 2 * np.ones(Nx - 3), (1 - r) * np.ones(Nx - 2), r / 2 * np.ones(Nx - 3)],
+                 offsets=[-1, 0, 1], format='csc')
+
+    t_full = np.linspace(0, t_output[-1], int(t_output[-1]/dt) + 1)
+    u_full = np.zeros((len(t_full), Nx))
+    u_full[0, :] = u[0, :]
+
+    for n in range(len(t_full) - 1):
+        rhs = B.dot(u_full[n, 1:-1]) + dt * beta * np.sin(np.pi * x[1:-1])
+        u_full[n + 1, 1:-1] = spla.spsolve(A, rhs)
+        u_full[n + 1, 0] = 0
+        u_full[n + 1, -1] = 0
+
+    # Resample u to match t_output
+    step_interval = int(0.01 / dt)
+    u_output = u_full[::step_interval][:Nt]
+    return u_output
 
 def numerical_solution(x, t_output, alpha, beta, dx=0.01, dt=0.01):
     Nx = len(x)
@@ -67,7 +99,7 @@ common_cmap = 'viridis'
 
 for idx, (alpha, beta) in enumerate(param_combos):
     U_analytical = analytical_solution(x, t, alpha, beta)
-    U_numeric_stable = numerical_solution(x, t, alpha, beta, dx=dx, dt=dt)
+    U_numeric_stable = numerical_solution_implicit(x, t, alpha, beta, dx=dx, dt=dt)
     vmin_shared = min(U_analytical.min(), U_numeric_stable.min())
     vmax_shared = max(U_analytical.max(), U_numeric_stable.max())
     std_dev, mean_ana, mean_num = compute_stats_aligned(U_analytical, U_numeric_stable)
