@@ -115,6 +115,7 @@ def visualize_vtk(x, times, DO_vascular_all, DO_muscular_all):
     - Renderer 3: 1D DO_vascular and DO_muscular vs time at x=nx/2
     """
     renderWindow = vtk.vtkRenderWindow()
+    renderWindow.SetSize(1200, 800)  # Adjust width and height as needed
     renderers = [vtk.vtkRenderer() for _ in range(4)]
     
     renderers[0].SetViewport(0.0, 0.5, 0.5, 1.0)
@@ -379,10 +380,10 @@ def visualize_vtk(x, times, DO_vascular_all, DO_muscular_all):
 def main():
     model = DOModel1D(length=10.0, nx=200, dt=0.01, total_time=10.0)
     model.set_conditions(
-        D_vascular=0.1,
+        D_vascular=0.01,
         D_muscular=0.05,
-        exchange_rate=0.5,
-        metabolism_rate=0.5,
+        exchange_rate=0.25,
+        metabolism_rate=0.15,
         Oi=1.0,
         Qi_scenario='decrease',
         Qi_initial=1.0,
