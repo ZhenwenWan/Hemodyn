@@ -1,66 +1,213 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 
-class Heat1DModel:
-    def __init__(self, alpha=0.1, beta=0.1, nx=100):
-        self.alpha = alpha
-        self.beta = beta
+
+def visualize_gradients(model):
+    print("\n--- Gradient Info ---")
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"{name}: grad norm = {param.grad.norm().item():.6f}")
+        else:
+            print(f"{name}: No gradient")
+
+
+class Heat1DModelTorch:
+    def __init__(self, nx=100):
         self.nx = nx
-        self.x = np.linspace(0, 1, nx + 1)
-        self.dx = self.x[1] - self.x[0]
-        self.u0 = np.sin(np.pi * self.x)
-        self.u0[0] = self.u0[-1] = 0
+        self.x = torch.linspace(0, 1, nx + 1)
 
-    def analytical(self, t):
-        term1 = np.exp(-np.pi**2 * self.alpha * t) * np.sin(np.pi * self.x)
-        term2 = self.beta / (np.pi**2 * self.alpha) * (1 - np.exp(-np.pi**2 * self.alpha * t)) * np.sin(np.pi * self.x)
-        return term1 + term2
+    def analytical(self, alpha, beta, t):
+        alpha = torch.tensor(alpha, dtype=torch.float32)
+        beta = torch.tensor(beta, dtype=torch.float32)
+        t = torch.tensor(t, dtype=torch.float32)
+        return (
+            torch.exp(-np.pi**2 * alpha * t) * torch.sin(np.pi * self.x) +
+            (beta / (np.pi**2 * alpha)) * (1 - torch.exp(-np.pi**2 * alpha * t)) * torch.sin(np.pi * self.x)
+        )
 
-    def numerical(self, t):
-        if t <= 0 or t > 1:
-            raise ValueError("t must be in the range (0, 1]")
-        dt = t / 100
-        Nt = 100
-        u = self.u0.copy()
+
+class PhysicsLayer(nn.Module):
+    def __init__(self, dx, nx, nt=20):
+        super().__init__()
+        self.dx = dx
+        self.nx = nx
+        self.nt = nt
+        self.x = torch.linspace(0, 1, nx + 1)
+
+    def forward_solver(self, alpha, beta, t):
+        dt = t / self.nt
+        r = alpha * dt / self.dx**2
         Nx = self.nx + 1
 
-        r = self.alpha * dt / self.dx**2
-        main_diag = (1 + r) * np.ones(Nx - 2)
-        off_diag = (-r / 2) * np.ones(Nx - 3)
-        A = sp.diags([off_diag, main_diag, off_diag], offsets=[-1, 0, 1], format='csc')
+        u = torch.sin(np.pi * self.x)
+        u[0] = 0
+        u[-1] = 0
+        u_internal = u[1:-1]
 
-        B = sp.diags([r / 2 * np.ones(Nx - 3), (1 - r) * np.ones(Nx - 2), r / 2 * np.ones(Nx - 3)],
-                     offsets=[-1, 0, 1], format='csc')
+        main_diag = (1 + r) * torch.ones(Nx - 2)
+        off_diag = (-r / 2) * torch.ones(Nx - 3)
+        A = torch.diag(main_diag) + torch.diag(off_diag, -1) + torch.diag(off_diag, 1)
 
-        u_internal = u[1:-1].copy()
-        for _ in range(Nt):
-            rhs = B.dot(u_internal) + dt * self.beta * np.sin(np.pi * self.x[1:-1])
-            u_internal = spla.spsolve(A, rhs)
-        u[1:-1] = u_internal
-        u[0] = u[-1] = 0
-        return u
+        B = torch.diag((1 - r) * torch.ones(Nx - 2))
+        B += torch.diag((r / 2) * torch.ones(Nx - 3), -1)
+        B += torch.diag((r / 2) * torch.ones(Nx - 3), 1)
 
-# Repeat the plots for four combinations
-alphas_betas = [(0.1, 0.1), (0.1, 0.5), (0.5, 0.1), (0.5, 0.5)]
-t_query = 0.5
+        f = torch.sin(np.pi * self.x[1:-1])
 
-fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-axes = axes.flatten()
+        for _ in range(self.nt):
+            rhs = torch.matmul(B, u_internal) + dt * beta * f
+            u_internal = torch.linalg.solve(A, rhs)
 
-for i, (alpha, beta) in enumerate(alphas_betas):
-    model = Heat1DModel(alpha=alpha, beta=beta)
-    u_ana = model.analytical(t_query)
-    u_num = model.numerical(t_query)
-    
-    axes[i].plot(model.x, u_ana, label='Analytical', lw=2)
-    axes[i].plot(model.x, u_num, '--', label='Numerical', lw=2)
-    axes[i].set_title(f'α={alpha}, β={beta}')
-    axes[i].legend()
-    axes[i].grid(True)
+        u_out = torch.zeros_like(u)
+        u_out[1:-1] = u_internal
+        return u_out
 
-plt.suptitle("Comparison of Analytical vs Numerical Solutions")
-plt.tight_layout(rect=[0, 0, 1, 0.96])
-plt.show()
+
+class FeatureNN(nn.Module):
+    def __init__(self, input_size):
+        super().__init__()
+        self.extractor = nn.Sequential(
+            nn.Linear(input_size, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        raw = self.extractor(x)
+        alpha = 0.1 + 0.9 * raw[:, 0:1]
+        beta = 0.1 + 0.9 * raw[:, 1:2]
+        return torch.cat([alpha, beta], dim=1)
+
+
+def valid(alpha, beta, t):
+    Nx = 100
+    dx = 1.0 / Nx
+    model = Heat1DModelTorch(nx=Nx)
+    physics_layer = PhysicsLayer(dx=dx, nx=Nx)
+
+    u_analytical = model.analytical(alpha, beta, t)
+    u_physics = physics_layer.forward_solver(alpha, beta, t)
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(model.x.numpy(), u_analytical.detach().numpy(), label="Analytical")
+    plt.plot(model.x.numpy(), u_physics.detach().numpy(), '--', label="Physics Layer")
+    plt.title(f"Validation at alpha={alpha}, beta={beta}, t={t}")
+    plt.xlabel("x")
+    plt.ylabel("u")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)
+    plt.close()
+
+
+def main():
+    Nx = 100
+    dx = 1.0 / Nx
+    model = Heat1DModelTorch(nx=Nx)
+    nn_model = FeatureNN(input_size=Nx + 1)
+    physics_layer = PhysicsLayer(dx=dx, nx=Nx)
+
+    for param in physics_layer.parameters():
+        param.requires_grad = False
+
+    optimizer = optim.Adam(nn_model.parameters(), lr=0.01)
+    loss_fn = nn.MSELoss()
+
+    true_alpha = 0.75
+    true_beta = 0.63
+    num_samples = 100
+    noise_std = 0.01
+
+    inputs = []
+    times = []
+    for _ in range(num_samples):
+        t = np.random.uniform(0.01, 1.0)
+        times.append(t)
+        u_clean = model.analytical(true_alpha, true_beta, t)
+        u_noisy = u_clean + noise_std * torch.randn_like(u_clean)
+        inputs.append(u_noisy)
+
+    true_inputs = torch.stack(inputs)
+    times = torch.tensor(times)
+
+    epochs = 200
+    loss_history = []
+    alpha_history = []
+    beta_history = []
+
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        alpha_vals = []
+        beta_vals = []
+        for i in range(num_samples):
+            optimizer.zero_grad()
+            input_i = true_inputs[i].unsqueeze(0)
+            t_i = times[i]
+
+            pred_params = nn_model(input_i)
+            alpha_i = pred_params[0, 0]
+            beta_i = pred_params[0, 1]
+            output = physics_layer.forward_solver(alpha_i, beta_i, t_i)
+
+            loss = loss_fn(input_i.squeeze(), output)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            alpha_vals.append(alpha_i.item())
+            beta_vals.append(beta_i.item())
+
+        loss_history.append(epoch_loss / num_samples)
+        alpha_history.append(np.mean(alpha_vals))
+        beta_history.append(np.mean(beta_vals))
+
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch+1}/{epochs}, Avg Total Loss = {epoch_loss / num_samples:.6f}")
+
+    pred_params = nn_model(true_inputs).detach()
+    pred_alpha_mean = pred_params[:, 0].mean().item()
+    pred_beta_mean = pred_params[:, 1].mean().item()
+
+    print("\n--- Recovered Parameters ---")
+    print(f"True alpha = {true_alpha:.3f}, Predicted alpha (mean) = {pred_alpha_mean:.4f}")
+    print(f"True beta  = {true_beta:.3f}, Predicted beta  (mean) = {pred_beta_mean:.4f}")
+
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1)
+    plt.plot(loss_history)
+    plt.title("Training Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE")
+    plt.grid(True)
+
+    plt.subplot(1, 3, 2)
+    plt.plot(alpha_history, label='Predicted α')
+    plt.axhline(true_alpha, color='r', linestyle='--', label='True α')
+    plt.title("Alpha Convergence")
+    plt.xlabel("Epoch")
+    plt.ylabel("Mean α")
+    plt.grid(True)
+    plt.legend()
+
+    plt.subplot(1, 3, 3)
+    plt.plot(beta_history, label='Predicted β')
+    plt.axhline(true_beta, color='r', linestyle='--', label='True β')
+    plt.title("Beta Convergence")
+    plt.xlabel("Epoch")
+    plt.ylabel("Mean β")
+    plt.grid(True)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
 
