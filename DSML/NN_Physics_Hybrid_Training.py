@@ -3,48 +3,67 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 
 
-class Heat1DModel:
-    def __init__(self, nx=100, nt=100, dx=0.01, dt=0.01):
+def visualize_gradients(model):
+    print("\n--- Gradient Info ---")
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"{name}: grad norm = {param.grad.norm().item():.6f}")
+        else:
+            print(f"{name}: No gradient")
+
+
+class Heat1DModelTorch:
+    def __init__(self, nx=100):
         self.nx = nx
-        self.nt = nt
-        self.dx = dx
-        self.dt = dt
-        self.x = np.linspace(0, 1, nx + 1)
+        self.x = torch.linspace(0, 1, nx + 1)
 
     def analytical(self, alpha, beta, t):
-        return np.exp(-np.pi**2 * alpha * t) * np.sin(np.pi * self.x) + \
-               (beta / (np.pi**2 * alpha)) * (1 - np.exp(-np.pi**2 * alpha * t)) * np.sin(np.pi * self.x)
+        alpha = torch.tensor(alpha, dtype=torch.float32)
+        beta = torch.tensor(beta, dtype=torch.float32)
+        t = torch.tensor(t, dtype=torch.float32)
+        return (
+            torch.exp(-np.pi**2 * alpha * t) * torch.sin(np.pi * self.x) +
+            (beta / (np.pi**2 * alpha)) * (1 - torch.exp(-np.pi**2 * alpha * t)) * torch.sin(np.pi * self.x)
+        )
 
-    def numerical(self, alpha, beta, t):
-        if t <= 0 or t > 1:
-            raise ValueError("t must be in the range (0, 1]")
-        dt = t / 100
-        Nt = 100
+
+class PhysicsLayer(nn.Module):
+    def __init__(self, dx, nx, nt=20):
+        super().__init__()
+        self.dx = dx
+        self.nx = nx
+        self.nt = nt
+        self.x = torch.linspace(0, 1, nx + 1)
+
+    def forward_solver(self, alpha, beta, t):
+        dt = t / self.nt
+        r = alpha * dt / self.dx**2
         Nx = self.nx + 1
-        dx = 1.0 / self.nx
-        x = np.linspace(0, 1, Nx)
-        u = np.sin(np.pi * x)
-        u[0] = u[-1] = 0
 
-        r = alpha * dt / dx**2
-        main_diag = (1 + r) * np.ones(Nx - 2)
-        off_diag = (-r / 2) * np.ones(Nx - 3)
-        A = sp.diags([off_diag, main_diag, off_diag], offsets=[-1, 0, 1], format='csc')
+        u = torch.sin(np.pi * self.x)
+        u[0] = 0
+        u[-1] = 0
+        u_internal = u[1:-1]
 
-        B = sp.diags([r / 2 * np.ones(Nx - 3), (1 - r) * np.ones(Nx - 2), r / 2 * np.ones(Nx - 3)],
-                     offsets=[-1, 0, 1], format='csc')
+        main_diag = (1 + r) * torch.ones(Nx - 2)
+        off_diag = (-r / 2) * torch.ones(Nx - 3)
+        A = torch.diag(main_diag) + torch.diag(off_diag, -1) + torch.diag(off_diag, 1)
 
-        u_internal = u[1:-1].copy()
-        for _ in range(Nt):
-            rhs = B.dot(u_internal) + dt * beta * np.sin(np.pi * x[1:-1])
-            u_internal = spla.spsolve(A, rhs)
+        B = torch.diag((1 - r) * torch.ones(Nx - 2))
+        B += torch.diag((r / 2) * torch.ones(Nx - 3), -1)
+        B += torch.diag((r / 2) * torch.ones(Nx - 3), 1)
 
-        u[1:-1] = u_internal
-        return u
+        f = torch.sin(np.pi * self.x[1:-1])
+
+        for _ in range(self.nt):
+            rhs = torch.matmul(B, u_internal) + dt * beta * f
+            u_internal = torch.linalg.solve(A, rhs)
+
+        u_out = torch.zeros_like(u)
+        u_out[1:-1] = u_internal
+        return u_out
 
 
 class FeatureNN(nn.Module):
@@ -58,44 +77,103 @@ class FeatureNN(nn.Module):
         )
 
     def forward(self, x):
-        return self.extractor(x)
+        raw = self.extractor(x)
+        alpha = raw[:, 0:1]
+        beta  = raw[:, 1:2]
+        return torch.cat([alpha, beta], dim=1)
+
+
+def valid(alpha, beta, t):
+    Nx = 100
+    dx = 1.0 / Nx
+    model = Heat1DModelTorch(nx=Nx)
+    physics_layer = PhysicsLayer(dx=dx, nx=Nx)
+
+    u_analytical = model.analytical(alpha, beta, t)
+    u_physics = physics_layer.forward_solver(alpha, beta, t)
+
+    plt.figure(figsize=(6, 4))
+    plt.plot(model.x.numpy(), u_analytical.detach().numpy(), label="Analytical")
+    plt.plot(model.x.numpy(), u_physics.detach().numpy(), '--', label="Physics Layer")
+    plt.title(f"Validation at alpha={alpha}, beta={beta}, t={t}")
+    plt.xlabel("x")
+    plt.ylabel("u")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.001)
+    plt.close()
 
 
 def main():
     Nx = 100
-    model = Heat1DModel(nx=Nx)
+    dx = 1.0 / Nx
+    model = Heat1DModelTorch(nx=Nx)
     nn_model = FeatureNN(input_size=Nx + 1)
+    physics_layer = PhysicsLayer(dx=dx, nx=Nx)
+
+    for param in physics_layer.parameters():
+        param.requires_grad = False
+
     optimizer = optim.Adam(nn_model.parameters(), lr=0.01)
     loss_fn = nn.MSELoss()
 
-    # Known ground truth parameters
-    true_alpha = 0.5
-    true_beta = 0.3
-    t = 1.0
+    true_alpha = 0.75
+    true_beta = 0.63
+    true_beta1 = 0.60
     num_samples = 100
+    noise_std = 0.01
 
-    # Generate identical samples from analytical model
-    true_inputs_np = np.array([model.analytical(true_alpha, true_beta, t) for _ in range(num_samples)])
-    true_inputs = torch.tensor(true_inputs_np, dtype=torch.float32)
+    inputs = []
+    times = []
+    for i in range(num_samples):
+        t = np.random.uniform(0.01, 1.0)
+        times.append(t)
+        if i % 2 == 0:
+            u_clean = model.analytical(true_alpha, true_beta, t)
+        else:
+            u_clean = model.analytical(true_alpha, true_beta1, t)
+        u_noisy = u_clean + noise_std * torch.randn_like(u_clean)
+        inputs.append(u_noisy)
 
-    # Create matching true targets for training
-    true_targets = torch.tensor([[true_alpha, true_beta]] * num_samples, dtype=torch.float32)
+    true_inputs = torch.stack(inputs)
+    times = torch.tensor(times)
 
-    epochs = 1000
+    epochs = 400
     loss_history = []
+    alpha_history = []
+    beta_history = []
 
     for epoch in range(epochs):
-        optimizer.zero_grad()
-        pred_params = nn_model(true_inputs)
-        loss = loss_fn(pred_params, true_targets)
-        loss.backward()
-        optimizer.step()
-        loss_history.append(loss.item())
+        epoch_loss = 0.0
+        alpha_vals = []
+        beta_vals = []
+        for i in range(num_samples):
+            optimizer.zero_grad()
+            input_i = true_inputs[i].unsqueeze(0)
+            t_i = times[i]
 
-        if (epoch + 1) % 100 == 0:
-            print(f"Epoch {epoch+1}/{epochs}, Loss = {loss.item():.6f}")
+            pred_params = nn_model(input_i)
+            alpha_i = pred_params[0, 0]
+            beta_i = pred_params[0, 1]
+            output = physics_layer.forward_solver(alpha_i, beta_i, t_i)
 
-    # Evaluation: use predicted alpha/beta in numerical solver
+            loss = loss_fn(input_i.squeeze(), output)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            alpha_vals.append(alpha_i.item())
+            beta_vals.append(beta_i.item())
+
+        loss_history.append(epoch_loss / num_samples)
+        alpha_history.append(np.mean(alpha_vals))
+        beta_history.append(np.mean(beta_vals))
+
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch+1}/{epochs}, Avg Total Loss = {epoch_loss / num_samples:.6f}")
+
     pred_params = nn_model(true_inputs).detach()
     pred_alpha_mean = pred_params[:, 0].mean().item()
     pred_beta_mean = pred_params[:, 1].mean().item()
@@ -104,27 +182,36 @@ def main():
     print(f"True alpha = {true_alpha:.3f}, Predicted alpha (mean) = {pred_alpha_mean:.4f}")
     print(f"True beta  = {true_beta:.3f}, Predicted beta  (mean) = {pred_beta_mean:.4f}")
 
-    # Use predicted mean to run numerical model for comparison
-    u_numerical = model.numerical(pred_alpha_mean, pred_beta_mean, t)
-    u_true = model.analytical(true_alpha, true_beta, t)
-
-    plt.figure()
-    plt.subplot(2, 1, 1)
-    plt.plot(model.x, u_true, label='Analytical Input')
-    plt.plot(model.x, u_numerical, label='Numerical from Predicted', linestyle='--')
-    plt.legend()
-    plt.title("Model Evaluation")
-
-    plt.subplot(2, 1, 2)
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 3, 1)
     plt.plot(loss_history)
     plt.title("Training Loss")
     plt.xlabel("Epoch")
-    plt.ylabel("MSE Loss")
+    plt.ylabel("MSE")
     plt.grid(True)
+
+    plt.subplot(1, 3, 2)
+    plt.plot(alpha_history, label='Predicted α')
+    plt.axhline(true_alpha, color='r', linestyle='--', label='True α')
+    plt.title("Alpha Convergence")
+    plt.xlabel("Epoch")
+    plt.ylabel("Mean α")
+    plt.grid(True)
+    plt.legend()
+
+    plt.subplot(1, 3, 3)
+    plt.plot(beta_history, label='Predicted β')
+    plt.axhline(0.615, color='r', linestyle='--', label='True β')
+    plt.title("Beta Convergence")
+    plt.xlabel("Epoch")
+    plt.ylabel("Mean β")
+    plt.grid(True)
+    plt.legend()
 
     plt.tight_layout()
     plt.show()
 
 
-main()
+if __name__ == "__main__":
+    main()
 
