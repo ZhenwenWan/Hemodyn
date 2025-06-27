@@ -7,6 +7,7 @@ import PhysicsModel as PM
 import importlib
 importlib.reload(PM)
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class FeatureNN(nn.Module):
     def __init__(self, input_size, param_bounds=None):
@@ -28,30 +29,21 @@ class FeatureNN(nn.Module):
             out = lower + (upper - lower) * out
         return out
 
-
 def valid(alpha, velocity, t):
-    Nx = 100
+    Nx = 1000
     dx = 1.0 / Nx
     model = PM.AdvDifAnalytical(nx=Nx)
-    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=20)
+    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=400).to(device)
 
-    alpha    = torch.tensor(alpha, dtype=torch.float32)
-    velocity = torch.tensor(velocity, dtype=torch.float32)
-    t        = torch.tensor(t, dtype=torch.float32)
+    alpha    = torch.tensor(alpha, dtype=torch.float32, device=device)
+    velocity = torch.tensor(velocity, dtype=torch.float32, device=device)
+    t        = torch.tensor(t, dtype=torch.float32, device=device)
     u_analytical = model.analytical(alpha, velocity, t)
     u_physics = physics_layer.forward_solver(alpha, velocity, t)
 
-    alpha    = torch.tensor(3.2e-5, dtype=torch.float32)
-    velocity = torch.tensor(-0.0122, dtype=torch.float32)
-    u_physics = physics_layer.forward_solver(alpha, velocity, t)
-
-    loss_fn = nn.MSELoss()
-    loss = loss_fn(u_analytical, u_physics)
-    print(f"Loss {loss :.6f}")
-
     plt.figure(figsize=(6, 4))
-    plt.plot(model.x.numpy(), u_analytical.detach().numpy(), label="Analytical")
-    plt.plot(model.x.numpy(), u_physics.detach().numpy(), '--', label="Physics Layer")
+    plt.plot(model.x.numpy(), u_analytical.detach().cpu().numpy(), label="Analytical")
+    plt.plot(model.x.numpy(), u_physics.detach().cpu().numpy(), '--', label="Physics Layer")
     plt.title(f"Validation at alpha={alpha}, velocity={velocity}, t={t}")
     plt.xlabel("x")
     plt.ylabel("u")
@@ -59,7 +51,6 @@ def valid(alpha, velocity, t):
     plt.grid(True)
     plt.tight_layout()
     plt.show()
-
 
 def prepare_training_data(model, true_alpha, true_velocity, num_samples, noise_std):
     inputs = []
@@ -75,7 +66,18 @@ def prepare_training_data(model, true_alpha, true_velocity, num_samples, noise_s
         input_vec = torch.cat([u_noisy, torch.tensor([t])])
         inputs.append(input_vec)
     return torch.stack(inputs)
-
+def prepare_training_data_old(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std):
+    inputs = []
+    for i in range(num_samples):
+        t = np.random.uniform(14.1, 14.2)
+        if i % 2 == 0:
+            u_clean = model.analytical(true_alpha, true_velocity, t)
+        else:
+            u_clean = model.analytical(true_alpha, true_velocity1, t)
+        u_noisy = u_clean + noise_std * torch.randn_like(u_clean)
+        input_vec = torch.cat([u_noisy, torch.tensor([t])])
+        inputs.append(input_vec.to(device))
+    return torch.stack(inputs)
 
 def main():
     Nx = 100
@@ -86,8 +88,8 @@ def main():
     num_samples = 100
     batch_size = 10
     input_size = Nx + 1 + 1  # u_noisy (Nx+1) + t
-    nn_model = FeatureNN(input_size=input_size, param_bounds=param_bounds)
-    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=20)
+    nn_model = FeatureNN(input_size=input_size, param_bounds=param_bounds).to(device)
+    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=20).to(device)
 
     for param in physics_layer.parameters():
         param.requires_grad = False
@@ -96,19 +98,19 @@ def main():
     loss_fn = nn.MSELoss()
 
     true_alpha = 4.0e-5
-    true_velocity = -0.011
+    true_velocity = -0.01
+    true_velocity1 = -0.011
     noise_std = 0.01
 
-    #training_data = prepare_training_data(model, true_alpha, true_velocity, num_samples, noise_std)
+    #training_data = prepare_training_data(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std)
     training_data = prepare_training_data(physics_layer, true_alpha, true_velocity, num_samples, noise_std)
 
-    epochs = 100
+    epochs = 20
     loss_history = []
     alpha_history = []
     velocity_history = []
 
     for epoch in range(epochs):
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
         perm = torch.randperm(num_samples)
         training_data = training_data[perm]
 
@@ -117,7 +119,7 @@ def main():
         velocity_vals = []
 
         for i in range(0, num_samples, batch_size):
-            batch = training_data[i:i+batch_size]
+            batch = training_data[i:i+batch_size].to(device)
             u_batch = batch[:, :-1]
             t_batch = batch[:, -1]
 
@@ -126,24 +128,22 @@ def main():
             alpha_batch = pred_params[:, 0]
             velocity_batch = pred_params[:, 1]
 
-            losses = []
-            for j in range(batch.shape[0]):
-                output = physics_layer.forward_solver(alpha_batch[j], velocity_batch[j], t_batch[j])
-                losses.append(loss_fn(u_batch[j], output))
-            loss = torch.stack(losses).mean()
+            output_batch = torch.stack([
+                physics_layer.forward_solver(alpha_batch[j], velocity_batch[j], t_batch[j])
+                for j in range(batch.shape[0])
+            ])
 
+            loss = loss_fn(output_batch, u_batch)
             loss.backward()
             optimizer.step()
 
             epoch_loss += loss.item() * batch.shape[0]
             alpha_vals.extend(alpha_batch.tolist())
             velocity_vals.extend(velocity_batch.tolist())
-            print(f"Sample {i+1}/{num_samples}, Loss {loss :.6f}, alpha_batch{alpha_batch.mean().item() :.9f}, velocity_batch{velocity_batch.mean().item() :.6f}")
 
         loss_history.append(epoch_loss / num_samples)
         alpha_history.append(np.mean(alpha_vals))
         velocity_history.append(np.mean(velocity_vals))
-        scheduler.step(epoch_loss / num_samples)
 
         print(f"Epoch {epoch+1}/{epochs}, Avg Total Loss = {epoch_loss / num_samples:.6f}")
 
@@ -187,5 +187,5 @@ def main():
 
 main()
 
-#valid(4.0e-5, -0.011, 10.2)
+#valid(2.0e-4, -0.01, 14)
 
