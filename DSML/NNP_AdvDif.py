@@ -30,17 +30,24 @@ class FeatureNN(nn.Module):
         return out
 
 def valid(alpha, velocity, t):
-    Nx = 1000
+    Nx = 100
     dx = 1.0 / Nx
     model = PM.AdvDifAnalytical(nx=Nx)
-    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=400).to(device)
+    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=20).to(device)
 
     alpha    = torch.tensor(alpha, dtype=torch.float32, device=device)
     velocity = torch.tensor(velocity, dtype=torch.float32, device=device)
     t        = torch.tensor(t, dtype=torch.float32, device=device)
     u_analytical = model.analytical(alpha, velocity, t)
-    u_physics = physics_layer.forward_solver(alpha, velocity, t)
-
+    #u_physics = physics_layer.forward_solver(alpha, velocity, t)
+    u_physics = physics_layer._forward_simulation(alpha, velocity, t)
+    for j in range(len(u_analytical)):
+        print(f"j {j}, {u_analytical[j]:.6f}, {u_physics[j]:.6f}")
+    ab = np.abs(u_analytical - u_physics)
+    a = np.abs(u_analytical)
+    b = np.abs(u_physics)
+    mre = 2.0*ab.mean()/(a.mean() + b.mean())
+    print(f"MRE {mre:.6f}")
     plt.figure(figsize=(6, 4))
     plt.plot(model.x.numpy(), u_analytical.detach().cpu().numpy(), label="Analytical")
     plt.plot(model.x.numpy(), u_physics.detach().cpu().numpy(), '--', label="Physics Layer")
@@ -52,10 +59,10 @@ def valid(alpha, velocity, t):
     plt.tight_layout()
     plt.show()
 
-def prepare_training_data(model, true_alpha, true_velocity, num_samples, noise_std):
+def prepare_training_data_numerical(model, true_alpha, true_velocity, num_samples, noise_std):
     inputs = []
     for i in range(num_samples):
-        t = np.random.uniform(2.0, 11.0)
+        t = np.random.uniform(2.0, 13.0)
         #u_clean = model.analytical(true_alpha, true_velocity, t)
 
         alpha    = torch.tensor(true_alpha, dtype=torch.float32)
@@ -66,10 +73,10 @@ def prepare_training_data(model, true_alpha, true_velocity, num_samples, noise_s
         input_vec = torch.cat([u_noisy, torch.tensor([t])])
         inputs.append(input_vec)
     return torch.stack(inputs)
-def prepare_training_data_old(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std):
+def prepare_training_data(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std):
     inputs = []
     for i in range(num_samples):
-        t = np.random.uniform(14.1, 14.2)
+        t = np.random.uniform(2.0, 13.0)
         if i % 2 == 0:
             u_clean = model.analytical(true_alpha, true_velocity, t)
         else:
@@ -89,7 +96,7 @@ def main():
     batch_size = 10
     input_size = Nx + 1 + 1  # u_noisy (Nx+1) + t
     nn_model = FeatureNN(input_size=input_size, param_bounds=param_bounds).to(device)
-    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=20).to(device)
+    physics_layer = PM.PhysicsLayer(dx=dx, nx=Nx, nt=40).to(device)
 
     for param in physics_layer.parameters():
         param.requires_grad = False
@@ -98,12 +105,12 @@ def main():
     loss_fn = nn.MSELoss()
 
     true_alpha = 4.0e-5
-    true_velocity = -0.01
-    true_velocity1 = -0.011
-    noise_std = 0.01
+    true_velocity = -0.011
+    true_velocity1 = -0.031
+    noise_std = 0.03
 
-    #training_data = prepare_training_data(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std)
-    training_data = prepare_training_data(physics_layer, true_alpha, true_velocity, num_samples, noise_std)
+    training_data = prepare_training_data(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std)
+
 
     epochs = 20
     loss_history = []
@@ -187,5 +194,5 @@ def main():
 
 main()
 
-#valid(2.0e-4, -0.01, 14)
+#valid(4.0e-5, -0.011, 2.0)
 
