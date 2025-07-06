@@ -42,15 +42,6 @@ def prepare_training_data(model, true_alpha, true_velocity, true_r0, true_r1, nu
     u_clean  = model.forward_solver(alpha, velocity, r0, r1, time_vec)
     u_noisy  = u_clean + noise_std * torch.randn_like(u_clean)
 
-    alpha    = torch.tensor(1.2*true_alpha, dtype=torch.float32)
-    velocity = torch.tensor(0.9*true_velocity, dtype=torch.float32)
-    r0       = torch.tensor(true_r0, dtype=torch.float32)
-    r1       = torch.tensor(1.2*true_r1, dtype=torch.float32)
-    v_clean  = model.forward_solver(alpha, velocity, r0, r1, time_vec)
-    v_noisy  = u_clean + 2*noise_std * torch.randn_like(u_clean)
-    u_noisy  = 0.5*(u_noisy + v_noisy)
-
-
     inputs = []
     for i in range(num_samples):
         input_vec = torch.cat([u_noisy[i], time_vec[i].unsqueeze(0)])
@@ -75,10 +66,10 @@ def main():
     loss_fn = nn.MSELoss()
 
     true_alpha = 1.50e-3
-    true_velocity = 0.015
+    true_velocity = 0.01
     true_r0 = 7.0e-2
     true_r1 = 7.0e-3
-    noise_std = 0.02
+    noise_std = 0.003
 
     training_data = prepare_training_data(physics_layer, true_alpha, true_velocity,
                                           true_r0, true_r1, num_samples, noise_std)
