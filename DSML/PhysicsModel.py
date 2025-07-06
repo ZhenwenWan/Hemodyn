@@ -56,62 +56,69 @@ class PhysicsLayer(nn.Module):
         self.nt = nt
         self.x = torch.linspace(0, 1, nx + 1)
 
-    def implicit_step(self, u, dt, alpha, velocity, inlet):
+    def initial_condition(self, alpha, velocity):
+        pi = np.pi
+        t0 = torch.tensor(1.0, dtype=torch.float32, device=alpha.device)
+        x = self.x.to(alpha.device)
+        return (1 / torch.sqrt(4 * pi * alpha * t0)) * torch.exp(-((x - 0.5 - velocity * t0)**2) / (4 * alpha * t0))
+
+    def boundary_condition(self, alpha, velocity, t):
+        pi = np.pi
+        return (1 / torch.sqrt(4 * pi * alpha * t)) * torch.exp(-((0.0 - 0.5 - velocity * t)**2) / (4 * alpha * t))
+
+    def assemble_matrix(self, alpha, velocity, dt):
         dx = self.dx
         Nx = self.nx + 1
-        device = u.device
+        device = alpha.device
 
         r_diff = alpha / dx**2
         r_adv = velocity / (2 * dx)
 
         A = torch.zeros((Nx-1, Nx-1), device=device)
-
         for i in range(1, Nx - 2):
             A[i, i - 1] = r_diff + r_adv
             A[i, i]     = - 2 * r_diff - 1/dt
             A[i, i + 1] = r_diff - r_adv
 
         A[0, 0] = 1.0
-        A[-1, -2] =   r_diff + r_adv 
-        A[-1, -1] = - r_diff - r_adv
+        A[-1, -2] =   1.0 
+        A[-1, -1] = - 1.0
 
-        rhs_vec = - u.clone()/dt
-        rhs_vec[0] = inlet
+        return A
 
-        u_new = torch.zeros(Nx, device=device)
-        u_new[:-1] = torch.linalg.solve(A, rhs_vec[:-1])
+    def solve_linear_system(self, A, rhs):
+        u_new = torch.zeros_like(self.x, device=rhs.device)
+        u_new[:-1] = torch.linalg.solve(A, rhs[:-1])
         u_new[-1] = u_new[-2]
         return u_new
+
+    def time_integration(self, alpha, velocity, t):
+        dt = (t - 1) / self.nt
+        alpha = alpha.float()
+        velocity = velocity.float()
+        device = alpha.device
+
+        u0 = self.initial_condition(alpha, velocity)
+        u1 = u0.clone()
+
+        for n in range(self.nt - 1):
+            tn = (1.0 + dt * (n + 1))
+            tn = tn if isinstance(tn, torch.Tensor) else torch.tensor(tn, dtype=torch.float32, device=device)
+            tn1 = tn + dt
+
+            inlet_n1 = self.boundary_condition(alpha, velocity, tn1)
+            rhs_vec = - u0.clone() / dt
+            rhs_vec[0] = inlet_n1
+
+            A = self.assemble_matrix(alpha, velocity, dt)
+            u1 = self.solve_linear_system(A, rhs_vec)
+            u0 = u1
+
+        return u1
 
     def forward_solver(self, alpha, velocity, t):
         return ForwardRHS.apply(alpha, velocity, self, t)
 
     def _forward_simulation(self, alpha, velocity, t):
-        dt = (t - 1) / self.nt
-        dx = self.dx
-        Nx = self.nx + 1
+        return self.time_integration(alpha, velocity, t)
 
-        alpha = alpha.float()
-        velocity = velocity.float()
-        device = alpha.device
-
-        pi = np.pi
-        x = self.x.to(device)
-
-        t0 = torch.tensor(1.0, dtype=torch.float32, device=device)
-        u0 = (1 / torch.sqrt(4 * pi * alpha * t0)) * torch.exp(-((x - 0.5 - velocity * t0)**2) / (4 * alpha * t0))
-        u1 = u0.clone()
-
-        for n in range(self.nt - 1):
-            tn = t0 + dt * (n + 1)
-            tn_tensor = tn.float() if isinstance(tn, torch.Tensor) else torch.tensor(tn, dtype=torch.float32, device=device)
-            tn1_tensor = tn_tensor + dt
-
-            inlet_n = (1 / torch.sqrt(4 * pi * alpha * tn_tensor)) * torch.exp(-((0.0 - 0.5 - velocity * tn_tensor)**2) / (4 * alpha * tn_tensor))
-            inlet_n1 = (1 / torch.sqrt(4 * pi * alpha * tn1_tensor)) * torch.exp(-((0.0 - 0.5 - velocity * tn1_tensor)**2) / (4 * alpha * tn1_tensor))
-
-            u1 = self.implicit_step(u0, dt, alpha, velocity, inlet_n1)
-
-            u0 = u1
-
-        return u1

@@ -112,7 +112,7 @@ def main():
     training_data = prepare_training_data(model, true_alpha, true_velocity, true_velocity1, num_samples, noise_std)
 
 
-    epochs = 20
+    epochs = 2
     loss_history = []
     alpha_history = []
     velocity_history = []
