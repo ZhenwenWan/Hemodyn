@@ -211,48 +211,7 @@ class SequentialHemodynamics1D:
             print(f"Error in solve_step at t={t_curr:.3f}: {e}")
             return None
 
-    def display_step_result(self, step, A, Q, P, x, A0, Q0, P0, t):
-        fig, axs = plt.subplots(1, 3, figsize=(12, 4))
-        axs[0].plot(x, A[step] * A0, label=f't={t[step]:.3f}')
-        axs[0].set_title("A (Cross-sectional Area)")
-        axs[0].set_xlabel("x (m)")
-        axs[0].set_ylabel("A (m²)")
-    
-        axs[1].plot(x, Q[step] * Q0, label=f't={t[step]:.3f}')
-        axs[1].set_title("Q (Flow Rate)")
-        axs[1].set_xlabel("x (m)")
-        axs[1].set_ylabel("Q (m³/s)")
-    
-        axs[2].plot(x, P[step] * P0, label=f't={t[step]:.3f}')
-        axs[2].set_title("P (Pressure)")
-        axs[2].set_xlabel("x (m)")
-        axs[2].set_ylabel("P (Pa)")
-    
-        for ax in axs:
-            ax.legend()
-            ax.grid(True)
-        plt.suptitle(f"Solution at t={t[step]:.3f}")
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
-        plt.show()
-    
-    def visualize_all_steps(self, A, Q, P, x, t, A0, Q0, P0):
-        X, T = np.meshgrid(x, t)
-    
-        for name, data, scale, label in [
-            ("A (Area)", A, A0, "A (m²)"),
-            ("Q (Flow)", Q, Q0, "Q (m³/s)"),
-            ("P (Pressure)", P, P0, "P (Pa)")
-        ]:
-            plt.figure(figsize=(10, 4))
-            plt.contourf(X, T, data * scale, levels=50, cmap='viridis')
-            plt.colorbar(label=label)
-            plt.xlabel("x (m)")
-            plt.ylabel("t (s)")
-            plt.title(f"{name} over Space and Time")
-            plt.tight_layout()
-            plt.show()
-
-    def solve(self, U0, nt_, t_, tol=1e-6, maxit=300):
+    def solve(self, U0, x_, nt_, t_, tol=1e-6, maxit=300):
         try:
             A_seq = np.zeros((nt_, self.nx))
             Q_seq = np.zeros((nt_, self.nx))
@@ -269,16 +228,9 @@ class SequentialHemodynamics1D:
                 A_seq[j], Q_seq[j], P_seq[j] = A, Q, P
                 U_prev = U_next
                 print(f"Completed step {j}/{nt_-1}, t={t_curr:.3f}")
-                if j == nt_ - 1 or status > 0:
-                    self.display_step_result(step=j, A=A_seq, Q=Q_seq, P=P_seq, x=x, A0=A0, Q0=Q0, P0=P0, t=t)
-                    self.visualize_all_steps(A_seq, Q_seq, P_seq, x, t, A0, Q0, P0)
 
-            np.savez('sequential_results.npz', A=A_seq*A0, Q=Q_seq*Q0, P=P_seq*P0, t=t, x=x)
-            print("Sequential results saved to sequential_results.npz")
             return A_seq, Q_seq, P_seq
         except Exception as e:
             print(f"Error in sequential solve: {e}")
-            np.savez('sequential_results_partial.npz', A=A_seq[:j]*A0, Q=Q_seq[:j]*Q0, P=P_seq[:j]*P0, t=t[:j], x=x)
-            print("Partial results saved to sequential_results_partial.npz")
             return A_seq[:j], Q_seq[:j], P_seq[:j]
 
