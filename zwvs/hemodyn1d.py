@@ -7,9 +7,6 @@ from hemodyn1d_seq import SequentialHemodynamics1D
 import plots
 
 
-print("Python version:", sys.version)
-print("Starting vshd14_4_dimensionless.py execution")
-
 # --- 1. Setup parameters ---
 try:
     print("Setting up parameters")
@@ -45,7 +42,7 @@ except Exception as e:
     sys.exit(1)
 
 
-# --- 3. Run and Verify Sequential Solver ---
+# --- 2. Run and Verify Sequential Solver ---
 try:
     print("Initializing U0 for sequential solver")
     U0_seq = np.zeros(3 * nx).copy()  # Ensure writable array
