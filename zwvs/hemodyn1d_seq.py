@@ -2,6 +2,7 @@ import sys
 import numpy as np
 import scipy.sparse as sp
 from CoDoSol import CoDoSol
+import plots
 
 class SequentialHemodynamics1D:
     def __init__(self, nx_, dx_, dt_, params_, Q_in_, P_in_, P_out_, Q_out_, bounds_=None):
@@ -28,36 +29,98 @@ class SequentialHemodynamics1D:
             raise
 
     def residual(self, U, A_prev, Q_prev, P_prev, t_curr):
+        dt = self.dt
+        dx = self.dx
+        nx = self.nx
         try:
             A, Q, P = self.unpack(U)
-            α = self.params['alpha']
-            ρ_scaled = self.params['rho_scaled']
-            β_scaled = self.params['beta_scaled']
-            KR_scaled = self.params['K_R_scaled']
-            R = np.zeros((self.nx, 3))
-            # Dimensionless boundary conditions
-            Aval_in = ((self.P_in(t_curr) - (1 - β_scaled)) / β_scaled)**2
-            Aval_out = ((self.P_out(t_curr) - (1 - β_scaled)) / β_scaled)**2
-            if Aval_in <= 0 or Aval_out <= 0:
-                print(f"Warning: Invalid boundary conditions at t={t_curr:.3f}, Aval_in={Aval_in:.2e}, Aval_out={Aval_out:.2e}")
-            R[0] = [A[0] - Aval_in,
-                    Q[0] - self.Q_in(t_curr),
-                    P[0] - self.P_in(t_curr)]
-            R[-1] = [A[-1] - Aval_out,
-                     Q[-1] - self.Q_out(t_curr),
-                     P[-1] - self.P_out(t_curr)]
+            α     = self.params['alpha']
+            ρ     = self.params['rho']
+            β     = self.params['beta']
+            KR    = self.params['K_R']
+            Miu   = self.params['Miu']
+            R_out = self.params['R_out']
+            P_ref = self.params['P_ref']
+            A0    = self.params['A0']
+            Q0    = self.params['Q0']
+            P0    = self.params['P0']
 
-            for i in range(1, self.nx-1):
-                At = (A[i] - A_prev[i]) / self.dt
-                Ax = (Q[i+1] - Q[i-1]) / (2 * self.dx)
-                Qt = (Q[i] - Q_prev[i]) / self.dt
-                QQ = α * Q[i+1]**2 / A[i+1]
-                Mx = (QQ - α * Q[i-1]**2 / A[i-1]) / (2 * self.dx)
-                Pr = A[i] * (P[i+1] - P[i-1]) / (2 * self.dx * ρ_scaled)
-                C = 1.0 + β_scaled * (np.sqrt(A[i]) - 1.0)
+            R = np.zeros((nx, 3))
+            # Dimensionless boundary conditions
+            Aval_in = (np.sqrt(A0) + (self.P_in(t_curr) - P0) / β)**2
+            R[0]  = [ A[0] - Aval_in,
+                      Q[0] - self.Q_in(t_curr),
+                      P[0] - self.P_in(t_curr)]
+            R[-1] = [(A[-1] - A_prev[-1]) / dt + (Q[-1] - Q[-2]) / dx,
+                      P[-1] - (P_ref + R_out * Q[-1]),
+                      P[-1] - P0 - β * (np.sqrt(A[-1]) - np.sqrt(A0))]
+
+            for i in range(1, nx-1):
+                At   = (A[i] - A_prev[i]) / dt
+                Ax   = (Q[i+1] - Q[i-1]) / (2 * dx)
+                Qt   = (Q[i] - Q_prev[i]) / dt
+                QQ   = α * Q[i+1]**2 / A[i+1]
+                Qm   = Miu * (Q[i+1] - 2 * Q[i] + Q[i-1]) / dx / dx
+                Mx   = (QQ - α * Q[i-1]**2 / A[i-1]) / (2 * dx)
+                Pr   = A[i] * (P[i+1] - P[i-1]) / (2 * dx * ρ)
                 R[i] = [At + Ax,
-                        Qt + Mx + Pr + KR_scaled * Q[i] / A[i],
-                        P[i] - C]
+                        Qt + Mx + Pr + KR * Q[i] / A[i] - Qm,
+                        P[i] - P0 - β * (np.sqrt(A[i]) - np.sqrt(A0))]
+
+            for i in range(nx):
+                R[i] = [R[i,0]/A0, R[i,1]/Q0, R[i,2]/P0]
+
+            if np.any(np.isnan(R)) or np.any(np.isinf(R)):
+                print(f"NaN or Inf in residual at t={t_curr:.3f}, R min/max: {np.min(R):.2e}/{np.max(R):.2e}")
+            return R.T.ravel()
+        except Exception as e:
+            print(f"Error in sequential residual at t={t_curr:.3f}: {e}")
+            raise
+
+    def residual1(self, U, A_prev, Q_prev, P_prev, t_curr):
+        dt = self.dt
+        dx = self.dx
+        nx = self.nx
+        try:
+            A, Q, P = self.unpack(U)
+            α     = self.params['alpha']
+            ρ     = self.params['rho']
+            β     = self.params['beta']
+            KR    = self.params['K_R']
+            Miu   = self.params['Miu']
+            R_out = self.params['R_out']
+            P_ref = self.params['P_ref']
+            A0    = self.params['A0']
+            Q0    = self.params['Q0']
+            P0    = self.params['P0']
+
+            R = np.zeros((nx, 3))
+            # Dimensionless boundary conditions
+            Aval_in = (np.sqrt(A0) + (self.P_in(t_curr) - P0) / β)**2
+            R[0]  = [ A[0] - Aval_in,
+                      Q[0] - self.Q_in(t_curr),
+                      P[0] - self.P_in(t_curr)]
+            R[-1] = [(A[-1] - A_prev[-1]) / dt + (Q[-1] - Q[-2]) / dx,
+                      P[-1] - (P_ref + R_out * Q[-1]),
+                      P[-1] - P0 - β * (np.sqrt(A[-1]) - np.sqrt(A0))]
+
+            for i in range(1, nx-1):
+                At   = (A[i] - A_prev[i]) / dt
+                Ax   = (Q[i+1] - Q[i-1]) / (2 * dx)
+                Qt   = (Q[i] - Q_prev[i]) / dt
+                QQ   = α * Q[i+1]**2 / A[i+1]
+                Qm   = Miu * (Q[i+1] - 2 * Q[i] + Q[i-1]) / dx / dx
+                Mx   = (QQ - α * Q[i-1]**2 / A[i-1]) / (2 * dx)
+                Pr   = A[i] * (P[i+1] - P[i-1]) / (2 * dx * ρ)
+                R[i] = [At + Ax,
+                        Qt + Mx + Pr + KR * Q[i] / A[i] - Qm,
+                        P[i] - P0 - β * (np.sqrt(A[i]) - np.sqrt(A0))]
+                #print(f"i {i}, R[i][0] {R[i][0]:.3e}, R[i][1] {R[i][1]:.3e}, R[i][2] {R[i][2]:.3e}")
+                #print(f"i {i}, A[i] {A[i]:.3e},  At {At:.3e},  Ax {Ax:.3e},  Q[i] {Q[i]:.3e},  P[i] {P[i]:.3e} ")
+
+
+            for i in range(nx):
+                R[i] = [R[i,0]/A0, R[i,1]/Q0, R[i,2]/P0]
 
             if np.any(np.isnan(R)) or np.any(np.isinf(R)):
                 print(f"NaN or Inf in residual at t={t_curr:.3f}, R min/max: {np.min(R):.2e}/{np.max(R):.2e}")
@@ -71,25 +134,39 @@ class SequentialHemodynamics1D:
         def idx(i, k):
             return self.nx*k + i
 
+        dt = self.dt
+        dx = self.dx
+        nx = self.nx
         try:
             A, Q, P = self.unpack(U)
-            α = self.params['alpha']
-            ρ_scaled = self.params['rho_scaled']
-            β_scaled = self.params['beta_scaled']
-            KR_scaled = self.params['K_R_scaled']
+            α     = self.params['alpha']
+            ρ     = self.params['rho']
+            β     = self.params['beta']
+            KR    = self.params['K_R']
+            Miu   = self.params['Miu']
+            R_out = self.params['R_out']
+            P_ref = self.params['P_ref']
+            A0    = self.params['A0']
+            Q0    = self.params['Q0']
+            P0    = self.params['P0']
             rows, cols, data = [], [], []
 
             def add(r, c, v):
                 rows.append(r); cols.append(c); data.append(v)
 
-            add(idx(0, 0), idx(0, 0), 1.0)
-            add(idx(0, 1), idx(0, 1), 1.0)
-            add(idx(0, 2), idx(0, 2), 1.0)
-            add(idx(self.nx-1, 0), idx(self.nx-1, 0), 1.0)
-            add(idx(self.nx-1, 1), idx(self.nx-1, 1), 1.0)
-            add(idx(self.nx-1, 2), idx(self.nx-1, 2), 1.0)
+            add(idx(0, 0), idx(0, 0), 1.0/A0)
+            add(idx(0, 1), idx(0, 1), 1.0/Q0)
+            add(idx(0, 2), idx(0, 2), 1.0/P0)
+            i = nx - 1
+            add(idx(i, 0), idx(i, 0),      1.0/dt/A0) #(A[-1] - A_prev[-1]) / dt
+            add(idx(i, 0), idx(i, 1),      1.0/dx/A0) #(Q[-1] - Q[-2]) / dx
+            add(idx(i, 0), idx(i - 1, 1), -1.0/dx/A0) #(Q[-1] - Q[-2]) / dx
+            add(idx(i, 1), idx(i, 1), -R_out/Q0) #-(P_ref + R_out * Q[-1])
+            add(idx(i, 1), idx(i, 2),             1/Q0) #P[-1]
+            add(idx(i, 2), idx(i, 0), -0.5*β/np.sqrt(A[-1])/P0) #-β * (np.sqrt(A[-1])
+            add(idx(i, 2), idx(i, 2),                            1/P0) #P[-1]
 
-            for i in range(1, self.nx-1):
+            for i in range(1, nx-1):
                 aji = A[i]
                 qji = Q[i]
                 pjp = P[i + 1]
@@ -100,28 +177,28 @@ class SequentialHemodynamics1D:
                 qjm = Q[i - 1]
 
                 r0 = idx(i, 0)
-                add(r0, idx(i, 0), 1.0 / self.dt)
-                add(r0, idx(i + 1, 1), 1.0 / (2 * self.dx))
-                add(r0, idx(i - 1, 1), -1.0 / (2 * self.dx))
+                add(r0, idx(i, 0),      1.0 / dt /A0)
+                add(r0, idx(i + 1, 1),  1.0 / (2 * dx) /A0)
+                add(r0, idx(i - 1, 1), -1.0 / (2 * dx) /A0)
 
                 r1 = idx(i, 1)
-                add(r1, idx(i, 1), 1.0 / self.dt)
-                add(r1, idx(i + 1, 1), α * 2 * qjp / ajp / (2 * self.dx))
-                add(r1, idx(i + 1, 0), -α * qjp**2 / ajp**2 / (2 * self.dx))
-                add(r1, idx(i - 1, 1), -α * 2 * qjm / ajm / (2 * self.dx))
-                add(r1, idx(i - 1, 0), α * qjm**2 / ajm**2 / (2 * self.dx))
-                add(r1, idx(i + 1, 2), aji / (2 * self.dx * ρ_scaled))
-                add(r1, idx(i - 1, 2), -aji / (2 * self.dx * ρ_scaled))
-                dpdx = (pjp - pjm) / (2 * self.dx)
-                add(r1, idx(i, 0), dpdx / ρ_scaled)
-                add(r1, idx(i, 1), KR_scaled / aji)
-                add(r1, idx(i, 0), -KR_scaled * qji / aji**2)
+                add(r1, idx(i, 1), 1.0 / dt /Q0 + 2 * Miu / dx / dx /Q0)
+                add(r1, idx(i + 1, 1),  α * 2 * qjp    / ajp    / (2 * dx) /Q0 - Miu / dx / dx /Q0) 
+                add(r1, idx(i + 1, 0), -α *     qjp**2 / ajp**2 / (2 * dx) /Q0)
+                add(r1, idx(i - 1, 1), -α * 2 * qjm    / ajm    / (2 * dx) /Q0 - Miu / dx / dx /Q0)
+                add(r1, idx(i - 1, 0),  α *     qjm**2 / ajm**2 / (2 * dx) /Q0)
+                add(r1, idx(i + 1, 2),  aji / (2 * dx * ρ) /Q0)
+                add(r1, idx(i - 1, 2), -aji / (2 * dx * ρ) /Q0)
+                dpdx = (pjp - pjm) / (2 * dx)
+                add(r1, idx(i, 0), dpdx / ρ /Q0)
+                add(r1, idx(i, 0), -KR * qji / aji**2 /Q0)
+                add(r1, idx(i, 1),  KR / aji /Q0)
 
                 r2 = idx(i, 2)
-                add(r2, idx(i, 2), 1.0)
-                add(r2, idx(i, 0), -β_scaled / (2 * np.sqrt(aji)))
+                add(r2, idx(i, 0), -β / (2 * np.sqrt(aji))/P0)
+                add(r2, idx(i, 2), 1.0/P0)
 
-            J = sp.csr_matrix((data, (rows, cols)), shape=(3 * self.nx, 3 * self.nx))
+            J = sp.csr_matrix((data, (rows, cols)), shape=(3 * nx, 3 * nx))
             if np.any(np.isnan(J.data)) or np.any(np.isinf(J.data)):
                 print(f"NaN or Inf in Jacobian at t={t_curr:.3f}, J min/max: {np.min(J.data):.2e}/{np.max(J.data):.2e}")
             return J
@@ -130,35 +207,43 @@ class SequentialHemodynamics1D:
             raise
 
     def explicit_predictor(self, U_prev, t_prev):
+        dt = self.dt
+        dx = self.dx
+        nx = self.nx
+        α            = self.params['alpha']
+        ρ     = self.params['rho']
+        β     = self.params['beta']
+        KR    = self.params['K_R']
+        Miu   = self.params['Miu']
+        R_out = self.params['R_out']
+        P_ref = self.params['P_ref']
+        A0           = self.params['A0']
+        Q0           = self.params['Q0']
+        P0           = self.params['P0']
         A_prev, Q_prev, P_prev = self.unpack(U_prev)
         A_next = np.zeros_like(A_prev)
         Q_next = np.zeros_like(Q_prev)
         P_next = np.zeros_like(P_prev)
     
-        α = self.params['alpha']
-        ρ_scaled = self.params['rho_scaled']
-        β_scaled = self.params['beta_scaled']
-        KR_scaled = self.params['K_R_scaled']
-    
         # Boundary conditions
-        Aval_in = max(((self.P_in(t_prev) - (1 - β_scaled)) / β_scaled)**2, 1.0)
-        Aval_out = max(((self.P_out(t_prev) - (1 - β_scaled)) / β_scaled)**2, 1.0)
         Q_next[0] = self.Q_in(t_prev)
-        Q_next[-1] = self.Q_out(t_prev)
-        A_next[0] = Aval_in
-        A_next[-1] = Aval_out
         P_next[0] = self.P_in(t_prev)
-        P_next[-1] = self.P_out(t_prev)
-        for i in range(1, self.nx - 1):
-            At = -(Q_prev[i+1] - Q_prev[i-1]) / (2 * self.dx)
+        A_next[0] = (np.sqrt(A0) + (self.P_in(t_prev) - P0) / β)**2
+
+        for i in range(1, nx - 1):
+            At = -(Q_prev[i+1] - Q_prev[i-1]) / (2 * dx)
             QQ_p = α * Q_prev[i+1]**2 / A_prev[i+1]
             QQ_m = α * Q_prev[i-1]**2 / A_prev[i-1]
-            Mx = (QQ_p - QQ_m) / (2 * self.dx)
-            Pr = A_prev[i] * (P_prev[i+1] - P_prev[i-1]) / (2 * self.dx * ρ_scaled)
-            Qt = -(Mx + Pr + KR_scaled * Q_prev[i] / A_prev[i])
-            A_next[i] = A_prev[i] + self.dt * At
-            Q_next[i] = Q_prev[i] + self.dt * Qt
-            P_next[i] = 1.0 + β_scaled * (np.sqrt(A_next[i]) - 1.0)
+            Mx = (QQ_p - QQ_m) / (2 * dx)
+            Pr = A_prev[i] * (P_prev[i+1] - P_prev[i-1]) / (2 * dx * ρ)
+            Qt = -(Mx + Pr + KR * Q_prev[i] / A_prev[i]) + Miu * (Q_prev[i+1] - 2 * Q_prev[i] + Q_prev[i-1]) / dx / dx
+            A_next[i] = A_prev[i] + dt * At
+            Q_next[i] = Q_prev[i] + dt * Qt
+            P_next[i] = P0 + β * (np.sqrt(A_next[i]) - np.sqrt(A0))
+
+        A_next[-1] = A_prev[-1] - (Q_prev[-1] - Q_prev[-2]) * dt / dx 
+        P_next[-1] = P0 + β * (np.sqrt(A_next[-1]) - np.sqrt(A0))
+        Q_next[-1] = (P_next[-1] - P_ref) / R_out
     
         U_pred = np.concatenate([A_next, Q_next, P_next])
         return U_pred
@@ -168,6 +253,8 @@ class SequentialHemodynamics1D:
             A_prev, Q_prev, P_prev = self.unpack(U_prev)
             def fun(U):
                 return self.residual(U, A_prev, Q_prev, P_prev, t_curr)
+            def fun1(U):
+                return self.residual1(U, A_prev, Q_prev, P_prev, t_curr)
     
             def jac(U):
                 return self.jacobian_crs(U, t_curr).toarray()
@@ -179,38 +266,34 @@ class SequentialHemodynamics1D:
                 ub = np.full_like(U_prev, np.inf)
     
             tol = [tol, 0]
-            parms = [maxit, 1000, 1, -1, 0, 2]
+            parms = [maxit, 3000, 1, -1, 0, 2]
 
             U_Euler = self.explicit_predictor(U_prev, t_curr)
+
+            A, Q, P = self.unpack(U_Euler)
+            x = np.linspace(0, 1, self.nx)
+            #plots.display1step(1, x, A, Q, P)
+
             U_Euler = np.clip(U_Euler, lb + 1e-6, ub - 1e-6)
             result  = CoDoSol(U_Euler, fun, lb, ub, tol, parms, jac)
-
-            if len(result) == 3:
-                print(f"Solver failed at t={t_curr:.3f} due to infeasible initial guess")
-                return None
             sol, ierr, output, _, _, _ = result
             print(f"t={t_curr:.3f}, Ierr: {ierr}, Output: {output}")
-            if ierr > 0:
-                J_dense = jac(U_Euler)
-                cond_number = np.linalg.cond(J_dense)
-                print(f"Jacobian condition number at t={t_curr:.3f}: {cond_number:.2e}")
 
-                U_Euler = 0.5 * ( U_prev + self.explicit_predictor(U_prev, t_curr) )
-                U_Euler = np.clip(U_Euler, lb + 1e-6, ub - 1e-6)
-                result  = CoDoSol(U_Euler, fun, lb, ub, tol, parms, jac)
+            A, Q, P = self.unpack(sol)
+            print(f"Q = {Q[0]:.6f}, {Q[1]:.6f}, {Q[2]:.6f}, {Q[3]:.6f}")
+            U = np.concatenate([A, Q, P])
+            #res = fun1( U )
+            #print(f"np.max(Q) = {np.max(Q):.6f}")
+            #print(f"residual  = {np.max(res):.6e}")
+            plots.display1step(2, x, A, Q, P)
 
-                if len(result) == 3:
-                    print(f"Solver failed at t={t_curr:.3f} due to infeasible initial guess")
-                    return None
-                sol, ierr, output, _, _, _ = result
-                print(f"t={t_curr:.3f}, Ierr: {ierr}, Output: {output}")
 
             return sol, ierr
         except Exception as e:
             print(f"Error in solve_step at t={t_curr:.3f}: {e}")
             return None
 
-    def solve(self, U0, x_, nt_, t_, tol=1e-6, maxit=300):
+    def solve(self, U0, x_, nt_, t_, tol=1e-6, maxit=3000):
         try:
             A_seq = np.zeros((nt_, self.nx))
             Q_seq = np.zeros((nt_, self.nx))
@@ -221,13 +304,12 @@ class SequentialHemodynamics1D:
             for j in range(1, nt_):
                 t_curr = t_[j]
                 U_guess = U_prev.copy()  # Ensure writable copy
-                A_guess, Q_guess, P_guess = self.unpack(U_guess)
                 U_next, status = self.solve_step(U_guess, t_curr, tol, maxit)
                 A, Q, P = self.unpack(U_next)
                 A_seq[j], Q_seq[j], P_seq[j] = A, Q, P
                 U_prev = U_next
+                #plots.display1step(j, x_, A, Q, P)
                 print(f"Completed step {j}/{nt_-1}, t={t_curr:.3f}")
-
             return A_seq, Q_seq, P_seq
         except Exception as e:
             print(f"Error in sequential solve: {e}")
