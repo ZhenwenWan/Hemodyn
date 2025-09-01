@@ -1,11 +1,29 @@
-# SciAni01.py — Scientific animation of microvascular oxygen using PINN04.py outputs
-# Fixes:
-#  • Robust checkpoint resolution (avoid "checkpoints/checkpoints/..." duplication)
-#  • Force PyTorch backend (must match .pt checkpoint)
-#  • Load WEIGHTS ONLY from checkpoint (not optimizer)
+# SciAni.py — High-fidelity physiological oxygen dynamics visualization
+# Uses PINN outputs already available (capillary Oc 1D line, tissue Ot 2D grid)
+# and synthesizes the missing pieces (CO fields, carboxyHb, myoglobin sites,
+# textures, and 2D vessel rendering).
+#
+# Usage (typical):
+#   python SciAni.py --meta checkpoints/run_meta.json --frames 300 --fps 25
+#
+# Notes:
+# - Top 1/3 of the domain is microvasculature; bottom 2/3 is tissue.
+# - RBCs: red outer circle (white→red by O2 saturation), blue inner circle
+#   (white→blue by carboxyHb = 1 - O2 saturation), inner center randomly offset
+#   up to 2/3 of outer radius. (Matplotlib Circle patches, layered above images.)
+# - Dissolved O2 = green spots; dissolved CO = black spots; both diffuse in
+#   microvasculature and tissue. Myoglobins = fixed red circles in tissue, fill
+#   (white→red) follows local Ot.
+#
+# Implementation details leveraged from Matplotlib docs:
+#   - patches.Circle for the nested RBC & myoglobin icons
+#   - FuncAnimation for the animation loop
+#   - imshow layering + zorder for textures/fields ordering
+#
+# (Citations: see short notes at bottom.)
 
 import os
-os.environ.setdefault("DDE_BACKEND", "pytorch")  # set BEFORE importing deepxde
+os.environ.setdefault("DDE_BACKEND", "pytorch")  # must match .pt checkpoints
 
 import argparse
 import json
@@ -14,39 +32,43 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from matplotlib.patches import Circle
 
+# ---------------------- CLI ----------------------
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--meta", type=str, default="checkpoints/run_meta.json",
-                   help="Path to run_meta.json from PINN04.py")
-    p.add_argument("--nx", type=int, default=128)
-    p.add_argument("--ny", type=int, default=48)
-    p.add_argument("--frames", type=int, default=200)
+                   help="Path to run_meta.json produced by training")
+    p.add_argument("--nx", type=int, default=160, help="grid x for fields")
+    p.add_argument("--ny", type=int, default=96, help="grid y for fields")
+    p.add_argument("--frames", type=int, default=240)
     p.add_argument("--fps", type=int, default=25)
-    p.add_argument("--cap_h_frac", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=7)
+    # Visual entity counts
+    p.add_argument("--rbc", type=int, default=90)
+    p.add_argument("--o2_spots", type=int, default=900)
+    p.add_argument("--co_spots", type=int, default=700)
+    p.add_argument("--myoglobins", type=int, default=36)
+    # Vessel/tissue split (top fraction is microvasculature)
+    p.add_argument("--cap_frac", type=float, default=1.0/3.0)
     return p.parse_args()
 
-# ---------------------- I/O helpers ----------------------
+# ---------------------- Meta & ckpt I/O ----------------------
 def _resolve_checkpoint(meta_path, ckpt_field):
-    """Return a valid absolute checkpoint path by trying sensible candidates."""
+    """Return a valid absolute checkpoint path, fixing common path issues."""
     meta_path = os.path.abspath(meta_path)
     meta_dir  = os.path.dirname(meta_path)
     proj_root = os.path.dirname(meta_dir)
 
-    # If absolute and exists, take it.
     if os.path.isabs(ckpt_field) and os.path.exists(ckpt_field):
         return ckpt_field
 
-    # Build candidate list (first match wins).
     candidates = [
         os.path.normpath(os.path.join(meta_dir, ckpt_field)),
         os.path.normpath(os.path.join(proj_root, ckpt_field)),
         os.path.normpath(os.path.join(meta_dir, os.path.basename(ckpt_field))),
         os.path.normpath(os.path.join(proj_root, os.path.basename(ckpt_field))),
     ]
-
-    # Also handle accidental double "checkpoints/checkpoints" duplication.
     for c in list(candidates):
         candidates.append(c.replace(os.sep + "checkpoints" + os.sep + "checkpoints" + os.sep,
                                     os.sep + "checkpoints" + os.sep))
@@ -55,11 +77,7 @@ def _resolve_checkpoint(meta_path, ckpt_field):
         if os.path.exists(cand):
             return cand
 
-    raise FileNotFoundError(
-        "Checkpoint not found. Tried:\n  " + "\n  ".join(candidates)
-        + "\n(Hint: keep checkpoint_path either absolute, or relative to the project root "
-          "OR to the directory of run_meta.json)."
-    )
+    raise FileNotFoundError("Checkpoint not found. Tried:\n  " + "\n  ".join(candidates))
 
 def load_meta(meta_path):
     with open(meta_path, "r") as f:
@@ -71,9 +89,10 @@ def load_meta(meta_path):
     tp = meta.get("true_params", {})
     return ckpt, tp, meta
 
+# ---------------------- Model load (weights-only) ----------------------
 def build_model_and_load_weights(true_params, checkpoint_path):
     import deepxde as dde
-    from deepxde.backend import backend as F
+    from deepxde.backend import backend as F  # noqa: F401
     try:
         import torch
     except Exception as e:
@@ -82,236 +101,359 @@ def build_model_and_load_weights(true_params, checkpoint_path):
     if dde.backend.backend_name != "pytorch":
         raise RuntimeError(f"DeepXDE backend is {dde.backend.backend_name!r}, expected 'pytorch'.")
 
-    # Defaults if keys missing
     L = float(true_params.get("L", 1.0))
-    H = float(true_params.get("H", 0.2))
+    H = float(true_params.get("H", 0.3))
     T = float(true_params.get("T", 2.0))
 
-    # Minimal geometry/timebox & dummy PDE (no training, just to create a Model)
+    # Build a minimal model (no training) so we can load the net's weights
     geom = dde.geometry.Rectangle([0.0, 0.0], [L, H])
     timedomain = dde.geometry.TimeDomain(0.0, T)
     geomtime = dde.geometry.GeometryXTime(geom, timedomain)
 
     def pde_zero(X, Y):
-        z = F.zeros_like(X[:, :1])
-        return [z, z]  # two outputs (Oc, Ot)
+        # Two outputs (Oc, Ot) — we only need the network structure, not residuals.
+        return [Y[:, :1]*0.0, Y[:, :1]*0.0]
 
     data = dde.data.TimePDE(geomtime, pde_zero, [], num_domain=1, num_boundary=0,
                             num_initial=0, train_distribution="uniform")
     net = dde.nn.FNN([3] + [64] * 4 + [2], "tanh", "Glorot uniform")
     model = dde.Model(data, net)
-    model.compile("adam", lr=1e-3)  # create a no-op optimizer; we won't load its state
+    model.compile("adam", lr=1e-3)
 
-    # ---- Load WEIGHTS ONLY (avoid optimizer restore issues) ----
-    try:
-        ckpt = torch.load(checkpoint_path, map_location=torch.device("cpu"))
-    except TypeError:
-        ckpt = torch.load(checkpoint_path, map_location="cpu")
-
-    # DeepXDE (PyTorch) typically saves {"model_state_dict": ..., "optimizer_state_dict": ...}
-    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        state = ckpt["model_state_dict"]
-    else:
-        state = ckpt  # fallback: assume raw state_dict
-
-    model.net.load_state_dict(state)  # weights only
+    # Load WEIGHTS ONLY
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+    model.net.load_state_dict(state)
     return model, (L, H, T)
 
 # ---------------------- Field evaluators ----------------------
 def predict_fields(model, L, H, nx, ny, t_scalar):
+    """Return 1D vessel line Oc(x,t) and 2D tissue grid Ot(x,y,t)."""
     x = np.linspace(0.0, L, nx)
     y = np.linspace(0.0, H, ny)
     Xcap = np.column_stack([x, np.zeros_like(x), np.full_like(x, t_scalar)])
     Xg, Yg = np.meshgrid(x, y, indexing="xy")
     Xmat = np.column_stack([Xg.ravel(), Yg.ravel(), np.full(Xg.size, t_scalar)])
-    out_cap = model.predict(Xcap)           # (nx, 2) -> [Oc, Ot]
-    out_tis = model.predict(Xmat)[:, 1]     # take Ot
+    out_cap = model.predict(Xcap)          # (nx, 2) -> [Oc, Ot]
+    out_tis = model.predict(Xmat)[:, 1]    # Ot component
     Oc_line = out_cap[:, 0]
     Ot_grid = out_tis.reshape(ny, nx)
     return x, y, Oc_line, Ot_grid
 
-# ---------------------- Particle systems ----------------------
-class RBCStream:
-    def __init__(self, n, L, cap_h, u, fps, seed=0):
-        rng = np.random.default_rng(seed)
-        self.L, self.cap_h, self.u = L, cap_h, u
-        self.dt = 1.0 / fps
-        self.x = rng.uniform(0, L, n)
-        self.y = rng.uniform(0.15 * cap_h, 0.85 * cap_h, n)
-        self.oxy = rng.uniform(0.7, 1.0, n)     # oxy fraction
-        self.sizes = rng.uniform(15, 35, n)
-        self.jitter = 0.05 * cap_h
+def normalize01(arr, eps=1e-12):
+    a = np.asarray(arr)
+    lo, hi = np.nanpercentile(a, 1), np.nanpercentile(a, 99)
+    return np.clip((a - lo) / (hi - lo + eps), 0.0, 1.0)
 
-    def step(self, acid_fun):
+# ---------------------- Background textures ----------------------
+def make_textures(nx, ny, L, H, cap_h, rng):
+    """Return a single (ny,nx) texture array with distinct top/bottom looks."""
+    x = np.linspace(0, L, nx)
+    y = np.linspace(0, H, ny)
+    X, Y = np.meshgrid(x, y, indexing="xy")
+
+    # Tissue: soft striations + low-frequency noise
+    tex_tis = 0.55 + 0.10*np.sin(3*np.pi*X/L)*np.sin(12*np.pi*(Y/(H-cap_h+1e-9)))
+    tex_tis += 0.06 * rng.standard_normal((ny, nx))
+    tex_tis = normalize01(tex_tis)
+
+    # Microvasculature: faint wavy/bubbly pattern
+    Ycap = (Y - (H - cap_h)) / (cap_h + 1e-9)  # 0 at interface, 1 at top
+    tex_cap = 0.60 + 0.12*np.sin(10*np.pi*X/L) + 0.10*np.sin(16*np.pi*Ycap.clip(0,1))
+    tex_cap += 0.05 * rng.standard_normal((ny, nx))
+    tex_cap = normalize01(tex_cap)
+
+    texture = tex_tis.copy()
+    texture[Y >= (H - cap_h)] = tex_cap[Y >= (H - cap_h)]
+    return texture
+
+# ---------------------- Entities: RBCs, gases, myoglobin ----------------------
+class RBCStream:
+    """RBC kinematics + physiology placeholders; values updated per frame."""
+    def __init__(self, n, L, H, cap_h, u, fps, seed=0):
+        self.rng = np.random.default_rng(seed)
+        self.L, self.H, self.cap_h = L, H, cap_h
+        self.y_min, self.y_max = H - cap_h, H
+        self.dt = 1.0 / fps
+        self.u = float(u)
+
+        self.x = self.rng.uniform(0, L, n)
+        self.y = self.rng.uniform(self.y_min + 0.08*cap_h, self.y_max - 0.08*cap_h, n)
+        self.oxy = self.rng.uniform(0.65, 0.95, n)  # relative O2 saturation placeholder
+        self.deform = self.rng.uniform(0.012*cap_h, 0.024*cap_h, n)  # outer radii in data units
+        # Inner circle offset: up to 2/3 of outer radius
+        theta = self.rng.uniform(0, 2*np.pi, n)
+        rho   = self.rng.uniform(0, 2/3, n) * self.deform
+        self.offset = np.stack([rho*np.cos(theta), rho*np.sin(theta)], axis=1)
+        self.jitter = 0.12 * cap_h
+
+    def step(self, acid_fun, oc_sampler):
+        """Advect + jitter; update oxy by (i) Bohr proxy (acid) and (ii) Oc line."""
+        # Kinematics
         self.x += self.u * self.dt
         self.x[self.x > self.L] -= self.L
-        self.y += np.random.normal(0.0, self.jitter, size=self.y.shape) * self.dt
-        self.y = np.clip(self.y, 0.05 * self.cap_h, 0.95 * self.cap_h)
-        acid = acid_fun(self.x)
-        k_bohr = 1.5  # s^-1 (visual)
-        p = 1.0 - np.exp(-k_bohr * acid * self.dt)
-        self.oxy = np.maximum(0.05, self.oxy * (1.0 - 0.6 * p))
+        self.y += self.rng.normal(0.0, self.jitter, size=self.y.shape) * self.dt
+        self.y = np.clip(self.y, self.y_min + 0.04*self.cap_h, self.y_max - 0.04*self.cap_h)
 
-    def colors(self):
-        r = self.oxy
-        return np.stack([r, 0.1 * (1 - r), 1 - r, np.full_like(r, 0.9)], axis=1)
+        # Physiology (visual model)
+        acid = acid_fun(self.x)                      # higher acid -> unload O2
+        oc_norm = oc_sampler(self.x)                 # normalized vessel O2 at RBC x
+        # Move saturation toward oc_norm while down-weighting in acidic zones
+        target = oc_norm * (1.0 - 0.45*acid)
+        self.oxy += 0.65 * (target - self.oxy) * self.dt
+        self.oxy = np.clip(self.oxy, 0.02, 0.98)
 
-class TissueO2:
-    def __init__(self, L, H, cap_h, fps, seed=0):
-        self.L, self.H, self.cap_h = L, H, cap_h
-        self.dt = 1.0 / fps
-        self.xy = np.empty((0, 2), dtype=float)
-        self.alive = np.empty((0,), dtype=bool)
+class RBCRenderer:
+    """Manages nested Circle patches for RBCs."""
+    def __init__(self, ax, rbc: RBCStream, z=4, alpha=0.95):
+        self.ax = ax
+        self.rbc = rbc
+        self.outer = []
+        self.inner = []
+        for i in range(rbc.x.size):
+            r_out = rbc.deform[i]
+            r_in  = r_out / 3.0
+            c_out = Circle((rbc.x[i], rbc.y[i]), r_out, facecolor=(1, 0.6, 0.6),
+                           edgecolor="none", alpha=alpha, zorder=z)
+            # inner center offset relative to outer
+            cx, cy = rbc.x[i] + rbc.offset[i, 0], rbc.y[i] + rbc.offset[i, 1]
+            c_in  = Circle((cx, cy), r_in, facecolor=(0.6, 0.6, 1.0),
+                           edgecolor="none", alpha=alpha, zorder=z+0.1)
+            ax.add_patch(c_out)
+            ax.add_patch(c_in)
+            self.outer.append(c_out)
+            self.inner.append(c_in)
+
+    @staticmethod
+    def _color_white_to_red(s):   # s in [0,1]
+        return (1.0, 1.0 - s, 1.0 - s)
+    @staticmethod
+    def _color_white_to_blue(s):  # s in [0,1]
+        return (1.0 - s, 1.0 - s, 1.0)
+
+    def update(self):
+        rbc = self.rbc
+        for i in range(rbc.x.size):
+            r_out = rbc.deform[i]
+            r_in  = r_out / 3.0
+            # colors: outer by oxy; inner by carboxy (1 - oxy)
+            oxy = float(rbc.oxy[i])
+            car = float(1.0 - oxy)   # per spec: carboxyHb = 1 - pO2
+            self.outer[i].set_center((rbc.x[i], rbc.y[i]))
+            self.outer[i].set_radius(r_out)
+            self.outer[i].set_facecolor(self._color_white_to_red(oxy))
+            # inner offset stays relative to outer center
+            cx = rbc.x[i] + rbc.offset[i, 0]
+            cy = rbc.y[i] + rbc.offset[i, 1]
+            self.inner[i].set_center((cx, cy))
+            self.inner[i].set_radius(r_in)
+            self.inner[i].set_facecolor(self._color_white_to_blue(car))
+
+class GasSpots:
+    """Diffusing small molecules (O2 green / CO black), with simple reflecting boundaries."""
+    def __init__(self, n, L, H, fps, color="green", size=6, seed=0):
         self.rng = np.random.default_rng(seed)
-        self.sigma = math.sqrt(2e-3)  # mm / sqrt(s)
-        self.lambda_metab = 0.8       # s^-1
-        self.depots = self.rng.uniform([0.1*L, 0.2*H], [0.9*L, 0.95*H], size=(25, 2))
-        self.depot_r = 0.02 * H
-        self.depot_hit = np.zeros(self.depots.shape[0], dtype=int)
+        self.L, self.H = L, H
+        self.dt = 1.0 / fps
+        self.sigma = 0.018 * max(L, H)  # visual diffusion speed
+        self.xy = np.column_stack([
+            self.rng.uniform(0, L, n),
+            self.rng.uniform(0, H, n),
+        ])
+        self.sizes = np.full(n, size, dtype=float)
+        self.color = color
+        self._coll = None  # PathCollection
 
-    def inject_from_interface(self, n_new, where_x):
-        if n_new <= 0:
-            return
-        y0 = self.cap_h + self.rng.uniform(0.0, 0.02 * self.H, size=n_new)
-        x0 = where_x + self.rng.uniform(-0.01 * self.L, 0.01 * self.L, size=n_new)
-        x0 = np.clip(x0, 0.0, self.L)
-        pts = np.stack([x0, y0], axis=1)
-        self.xy = np.vstack([self.xy, pts])
-        self.alive = np.concatenate([self.alive, np.ones(n_new, dtype=bool)])
+    def add_to_axes(self, ax, z=3, alpha=0.75):
+        self._coll = ax.scatter(self.xy[:,0], self.xy[:,1], s=self.sizes,
+                                c=self.color, edgecolors="none", alpha=alpha, zorder=z)
+        return self._coll
 
     def step(self):
         if self.xy.size == 0:
             return
         disp = self.rng.normal(0.0, self.sigma * math.sqrt(self.dt), size=self.xy.shape)
-        self.xy[self.alive] += disp[self.alive]
-        self.xy[:, 0] = np.clip(self.xy[:, 0], 0.0, self.L)
-        self.xy[:, 1] = np.clip(self.xy[:, 1], self.cap_h + 1e-6, self.H)
-        p_die = 1.0 - np.exp(-self.lambda_metab * self.dt)
-        dies = self.rng.random(self.alive.shape) < p_die
-        cap = np.zeros_like(self.alive)
-        if self.xy.size:
-            for i, c in enumerate(self.depots):
-                d2 = np.sum((self.xy - c) ** 2, axis=1)
-                hit = (d2 < self.depot_r ** 2) & self.alive
-                if np.any(hit):
-                    self.depot_hit[i] += int(np.sum(hit))
-                    cap = cap | hit
-        self.alive = self.alive & (~dies) & (~cap)
+        self.xy += disp
+        # reflect at boundaries
+        for d, lo, hi in [(0, 0.0, self.L), (1, 0.0, self.H)]:
+            low = self.xy[:, d] < lo
+            high = self.xy[:, d] > hi
+            self.xy[low, d]  = 2*lo - self.xy[low, d]
+            self.xy[high, d] = 2*hi - self.xy[high, d]
+            self.xy[:, d] = np.clip(self.xy[:, d], lo, hi)
 
-    def scatter_data(self):
-        return self.xy[self.alive, :]
+    def update_artist(self):
+        if self._coll is not None:
+            self._coll.set_offsets(self.xy)
+
+class MyoglobinSites:
+    """Fixed myoglobin depots in tissue; color follows local Ot (white→red)."""
+    def __init__(self, n, L, H, cap_h, seed=0):
+        self.rng = np.random.default_rng(seed)
+        self.L, self.H, self.cap_h = L, H, cap_h
+        self.y_max = H - cap_h
+        self.xy = self.rng.uniform([0.08*L, 0.10*self.y_max],
+                                   [0.92*L, 0.95*self.y_max], size=(n, 2))
+        self.r = 0.02 * self.y_max
+        self.patches = []
+
+    @staticmethod
+    def _color_white_to_red(s):
+        return (1.0, 1.0 - s, 1.0 - s)
+
+    def add_to_axes(self, ax, z=4, alpha=0.9):
+        for i in range(self.xy.shape[0]):
+            c = Circle(tuple(self.xy[i]), radius=self.r,
+                       facecolor=(0.9, 0.9, 0.9), edgecolor="none",
+                       alpha=alpha, zorder=z)
+            ax.add_patch(c)
+            self.patches.append(c)
+        return self.patches
+
+    def update(self, Ot_grid, x_grid, y_grid):
+        # Nearest-neighbor sample of Ot at each depot center
+        nx, ny = x_grid.size, y_grid.size
+        for i, c in enumerate(self.patches):
+            cx, cy = self.xy[i]
+            ix = int(np.clip(np.searchsorted(x_grid, cx) - 1, 0, nx-1))
+            iy = int(np.clip(np.searchsorted(y_grid, cy) - 1, 0, ny-1))
+            s = float(normalize01(Ot_grid)[iy, ix])
+            c.set_facecolor(self._color_white_to_red(s))
+
+# ---------------------- Acid / CO synthesis helpers ----------------------
+def make_acid_fun_from_Ot(Ot_grid, y, H, cap_h, L):
+    """Build a 1D 'acid' profile along x using tissue Ot just below the interface."""
+    y_int = H - cap_h
+    row = np.clip(np.searchsorted(y, y_int) - 1, 1, len(y)-2)
+    line = Ot_grid[row, :]
+    acid = 1.0 - normalize01(line)  # low Ot -> high 'acid' (Bohr proxy)
+    x_axis = np.linspace(0, L, line.size)
+    def acid_fun(xs):
+        return np.interp(xs, x_axis, acid)
+    return acid_fun
+
+def make_oc_sampler(Oc_line, L):
+    oc_norm = normalize01(Oc_line)
+    x_axis = np.linspace(0, L, oc_norm.size)
+    def sampler(xs):
+        return np.interp(xs, x_axis, oc_norm)
+    return sampler
+
+def synthesize_CO_fields(Oc_line, Ot_grid):
+    """Return (CO_line, CO_grid) in [0,1] as complements (visual placeholder)."""
+    CO_line = 1.0 - normalize01(Oc_line)
+    CO_grid = 1.0 - normalize01(Ot_grid)
+    return CO_line, CO_grid
 
 # ---------------------- Animation ----------------------
 def main():
     args = parse_args()
-    np.random.seed(args.seed)
+    rng = np.random.default_rng(args.seed)
 
+    # --- Load model
     try:
         ckpt_path, tp, meta = load_meta(args.meta)
     except Exception as e:
         print(f"[FATAL] Could not resolve checkpoint: {e}")
         sys.exit(1)
-
     try:
         model, (L, H, T) = build_model_and_load_weights(tp, ckpt_path)
     except Exception as e:
         print(f"[FATAL] Could not load PINN weights: {e}")
         sys.exit(1)
 
-    cap_h = max(1e-3, args.cap_h_frac * H)
+    cap_h = max(1e-3, float(args.cap_frac) * H)   # top band height (microvasculature)
+    y_interface = H - cap_h
+
+    # --- Figure & axes (single 2D domain)
+    plt.rcParams["figure.figsize"] = (10.5, 7.0)
+    fig, ax = plt.subplots()
+    ax.set_xlim(0, L); ax.set_ylim(0, H)
+    ax.set_xlabel("x [mm]"); ax.set_ylabel("y [mm]")
+
+    # --- Background textures (static)
+    tex = make_textures(args.nx, args.ny, L, H, cap_h, rng)
+    im_tex = ax.imshow(tex, extent=[0, L, 0, H], origin="lower",
+                       cmap="Greys", interpolation="bilinear",
+                       alpha=0.28, zorder=0)
+
+    # Interface line
+    ax.axhline(y_interface, color="k", linewidth=1.0, zorder=2)
+
+    # --- Dynamic field overlay: combine vessel Oc (extruded to top band) + tissue Ot
+    field_img = ax.imshow(np.zeros((args.ny, args.nx)), extent=[0, L, 0, H],
+                          origin="lower", aspect="auto", interpolation="bilinear",
+                          vmin=0.0, vmax=1.0, cmap="viridis", alpha=0.65, zorder=1)
+    cbar = fig.colorbar(field_img, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("Relative O$_2$ (vessel+ tissue)")
+
+    # --- Entities
+    u = float(tp.get("u", 1.0))
+    rbc = RBCStream(n=args.rbc, L=L, H=H, cap_h=cap_h, u=u, fps=args.fps, seed=args.seed)
+    rbc_art = RBCRenderer(ax, rbc, z=4, alpha=0.96)
+
+    o2 = GasSpots(args.o2_spots, L, H, args.fps, color="lime", size=7, seed=args.seed+1)
+    co = GasSpots(args.co_spots, L, H, args.fps, color="black", size=6, seed=args.seed+2)
+    o2_coll = o2.add_to_axes(ax, z=3, alpha=0.75)
+    co_coll = co.add_to_axes(ax, z=3, alpha=0.70)
+
+    myo = MyoglobinSites(args.myoglobins, L, H, cap_h, seed=args.seed+3)
+    myo_patches = myo.add_to_axes(ax, z=4, alpha=0.92)
+
+    # --- Time grid
     ts = np.linspace(0.0, T, args.frames)
+    x_grid = np.linspace(0.0, L, args.nx)
+    y_grid = np.linspace(0.0, H, args.ny)
+    Xg, Yg = np.meshgrid(x_grid, y_grid, indexing="xy")
+    top_mask = Yg >= y_interface
 
-    u = float(tp.get("u", 1.0))  # mm/s
-    rbc = RBCStream(n=80, L=L, cap_h=cap_h, u=u, fps=args.fps, seed=args.seed)
-    tis = TissueO2(L=L, H=H, cap_h=cap_h, fps=args.fps, seed=args.seed + 1)
-
-    plt.rcParams["figure.figsize"] = (10, 7)
-    fig = plt.figure(constrained_layout=True)
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 3])
-    ax_cap = fig.add_subplot(gs[0, 0])
-    ax_tis = fig.add_subplot(gs[1, 0])
-
-    ax_cap.set_xlim(0, L)
-    ax_cap.set_ylim(0, cap_h)
-    ax_cap.set_xlabel("x [mm]")
-    ax_cap.set_ylabel("capillary y")
-    scat_rbc = ax_cap.scatter([], [], s=[], c=[], edgecolors="none")
-
-    ax_tis.axhline(cap_h, color="k", linewidth=1)
-    ax_tis.set_xlim(0, L)
-    ax_tis.set_ylim(0, H)
-    ax_tis.set_xlabel("x [mm]")
-    ax_tis.set_ylabel("y [mm]")
-
-    im = ax_tis.imshow(
-        np.zeros((args.ny, args.nx)),
-        extent=[0, L, 0, H],
-        origin="lower",
-        aspect="auto",
-        interpolation="bilinear",
-        vmin=0.0,
-        vmax=0.15,
-    )
-    cb = fig.colorbar(im, ax=ax_tis, fraction=0.03, pad=0.02)
-    cb.set_label("Ot [arb]")
-    scat_o2 = ax_tis.scatter([], [], s=6, c="white", alpha=0.7, edgecolors="none")
-
-    def make_acid_fun(Ot_grid, y):
-        idx_row = min(max(1, int(0.02 * len(y))), len(y) - 1)
-        row = Ot_grid[idx_row, :]
-        rmin, rmax = np.percentile(row, 5), np.percentile(row, 95)
-        norm = np.clip((row - rmin) / (rmax - rmin + 1e-9), 0, 1)
-        acid = 1.0 - norm
-        x_axis = np.linspace(0, L, len(row))
-        def acid_fun(xs):
-            return np.interp(xs, x_axis, acid)
-        return acid_fun
-
-    def predict_fields(model, L, H, nx, ny, t_scalar):
-        x = np.linspace(0.0, L, nx)
-        y = np.linspace(0.0, H, ny)
-        Xcap = np.column_stack([x, np.zeros_like(x), np.full_like(x, t_scalar)])
-        Xg, Yg = np.meshgrid(x, y, indexing="xy")
-        Xmat = np.column_stack([Xg.ravel(), Yg.ravel(), np.full(Xg.size, t_scalar)])
-        out_cap = model.predict(Xcap)
-        out_tis = model.predict(Xmat)[:, 1]
-        return x, y, out_cap[:, 0], out_tis.reshape(ny, nx)
-
+    # --- Per-frame update
     def update(i):
-        t = ts[i]
+        t = float(ts[i])
+
+        # 1) Get model fields
         x, y, Oc_line, Ot_grid = predict_fields(model, L, H, args.nx, args.ny, t)
-        Ot_noisy = Ot_grid + 0.02 * (np.std(Ot_grid) + 1e-12) * np.random.randn(*Ot_grid.shape)
-        im.set_data(Ot_noisy)
-        im.set_clim(vmin=max(0.0, float(np.min(Ot_grid))), vmax=float(np.max(Ot_grid)) + 1e-6)
 
-        acid_fun = make_acid_fun(Ot_grid, y)
-        rbc.step(acid_fun)
-        scat_rbc.set_offsets(np.c_[rbc.x, rbc.y])
-        scat_rbc.set_sizes(rbc.sizes)
-        scat_rbc.set_facecolors(rbc.colors())
+        # 2) Build combined display field (relative O2):
+        #    - vessel region (top band): extrude normalized Oc_line over the band
+        #    - tissue region: normalized Ot_grid
+        Oc_norm = normalize01(Oc_line)
+        Ot_norm = normalize01(Ot_grid)
+        field = Ot_norm.copy()
+        #field[top_mask] = np.repeat(Oc_norm[np.newaxis, :], top_mask.sum(axis=0)[0], axis=0)
+        iy0 = int(np.searchsorted(y_grid, y_interface, side="left"))
+        field[iy0:, :] = Oc_norm  # broadcasts across the top rows
 
-        bins = 12
-        counts, edges = np.histogram(rbc.x, bins=bins, range=(0, L))
-        idx = np.clip(np.digitize(rbc.x, edges) - 1, 0, bins - 1)
-        deoxy_mean = np.zeros(bins)
-        for b in range(bins):
-            m = (idx == b)
-            if np.any(m):
-                deoxy_mean[b] = np.mean(1.0 - rbc.oxy[m])
-        spawn_base = 6
-        for b in range(bins):
-            n_new = np.random.poisson(spawn_base * (0.3 + deoxy_mean[b]))
-            x_mid = 0.5 * (edges[b] + edges[b + 1])
-            tis.inject_from_interface(n_new, x_mid)
+        # optional: gentle noise for visual depth (doesn't alter dynamics)
+        field += 0.02 * (np.std(field) + 1e-9) * rng.standard_normal(field.shape)
+        field = np.clip(field, 0.0, 1.0)
 
-        tis.step()
-        scat_o2.set_offsets(tis.scatter_data())
+        field_img.set_data(field)
+        field_img.set_clim(0.0, 1.0)
 
-        ax_cap.set_title(f"Capillary RBCs (t={t:.2f} s)")
-        ax_tis.set_title("Tissue O$_2$ (PINN prediction + noise)")
-        return (im, scat_rbc, scat_o2)
+        # 3) Update Bohr-proxy & Oc sampler; step RBCs then recolor
+        acid_fun = make_acid_fun_from_Ot(Ot_grid, y, H, cap_h, L)
+        oc_smpl = make_oc_sampler(Oc_line, L)
+        rbc.step(acid_fun, oc_smpl)
+        rbc_art.update()
 
-    ani = FuncAnimation(fig, update, frames=args.frames, interval=1000 / args.fps, blit=False, repeat=True)
+        # 4) Synthesize CO fields (for molecules; simple complement)
+        CO_line, CO_grid = synthesize_CO_fields(Oc_line, Ot_grid)
+
+        # 5) Diffusing molecules (both regions)
+        o2.step()
+        co.step()
+        o2.update_artist()
+        co.update_artist()
+
+        # 6) Myoglobin sites color by local Ot
+        myo.update(Ot_grid, x_grid, y_grid)
+
+        ax.set_title(f"Oxygen dynamics — t={t:.2f} s   (top: microvasculature, bottom: tissue)")
+        return (field_img, o2_coll, co_coll, *myo_patches, *rbc_art.outer, *rbc_art.inner)
+
+    ani = FuncAnimation(fig, update, frames=args.frames, interval=1000/args.fps,
+                        blit=False, repeat=True)
     plt.show()
 
 if __name__ == "__main__":
