@@ -35,16 +35,17 @@ matplotlib.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--meta", type=str, default="checkpoints/run_meta.json")
-    p.add_argument("--nx", type=int, default=120)
-    p.add_argument("--ny", type=int, default=72)
+    p.add_argument("--nx", type=int, default=240)
+    p.add_argument("--ny", type=int, default=144)
     p.add_argument("--frames", type=int, default=480)   # default aligned with prior run
-    p.add_argument("--fps", type=int, default=300)
+    p.add_argument("--fps", type=int, default=30)
     p.add_argument("--seed", type=int, default=7)
-    p.add_argument("--rbc", type=int, default=20)
+    p.add_argument("--rbc", type=int, default=40)
     p.add_argument("--myoglobins", type=int, default=20)
-    p.add_argument("--o2_spots", type=int, default=80)
-    p.add_argument("--co_spots", type=int, default=80)
+    p.add_argument("--o2_spots", type=int, default=1000)
+    p.add_argument("--co_spots", type=int, default=1000)
     p.add_argument("--cap_frac", type=float, default=1.0/3.0)
+    p.add_argument("--vis_factor", type=float, default=0.2)
     p.add_argument("--vy_factor", type=float, default=0.01)
     p.add_argument("--vy_tau", type=float, default=0.9)
     p.add_argument("--sim_dt", type=float, default=0.01)
@@ -183,7 +184,7 @@ def _lerp3(c0: Sequence[float], c1: Sequence[float], s: float) -> Tuple[float, f
 
 
 def _mix_to_white(rgb: Sequence[float], k: float) -> np.ndarray:
-    return (1 - k) * np.array(rgb) + k * np.array((1, 1, 1))
+    return (1 - k) * np.array(rgb) + k * np.array((1, 0, 0))
 
 
 _RED_LO,  _RED_HI  = (1.00, 0.82, 0.82), (0.65, 0.05, 0.05)
@@ -289,11 +290,12 @@ class RBCStream:
 
     def step(self, acid_fun: Callable[[np.ndarray], np.ndarray],
              oc_sampler: Callable[[np.ndarray], np.ndarray],
-             u_fun: Callable[[np.ndarray], np.ndarray] = None) -> None:
+             u_fun: Callable[[np.ndarray], np.ndarray] = None, xtime: float=0.1) -> None:
         if u_fun is None:
             u_local = np.full_like(self.x, self.u, dtype=float)
         else:
-            u_local = np.asarray(u_fun(self.x), dtype=float)
+            ttime = np.abs(np.sin(np.pi * xtime))
+            u_local = np.asarray(u_fun(ttime, self.x), dtype=float)
 
         self.x += u_local * self.dt
         self.x[self.x > self.L] -= self.L
@@ -522,8 +524,8 @@ class MyoglobinSites:
         self.rng = np.random.default_rng(seed)
         self.L, self.H, self.cap_h = L, H, cap_h
         self.y_top_tis = H - cap_h
-        self.xy = self.rng.uniform([0.06 * L, 0.10 * self.y_top_tis],
-                                   [0.94 * L, 0.95 * self.y_top_tis], size=(n, 2))
+        self.xy = self.rng.uniform([0.02 * L, 0.04 * self.y_top_tis],
+                                   [0.98 * L, 0.96 * self.y_top_tis], size=(n, 2))
         self.r = 0.04 * self.y_top_tis  # modest radius; adjust if your SciAni14 uses a different factor
         self.patches: List[Circle] = []
         self.halos: List[Circle] = []
@@ -565,7 +567,7 @@ class MyoglobinSites:
             base = np.array(self._color_from_Ot(s))
             if self.flash:
                 B = float(np.clip(self.bias + self.depth * np.sin(2 * np.pi * self.freq * t + self.phase[i]), 0.0, 1.0))
-                col = (1 - (1 - B)) * base + (1 - B) * np.array((1, 1, 1))
+                col = (1 - (1 - B)) * base + (1 - B) * np.array((1, 0, 0))
             else:
                 col = base
             c.set_facecolor(tuple(col))
@@ -636,8 +638,8 @@ def main() -> None:
     ax.axhline(y_interface, color=(0.15, 0.05, 0.18), linewidth=1.0, zorder=2)
 
     # Flow speeds
-    u_meta = 10.0 * float(tp.get("u", 1.0))
-    u_visual = max(0.1, u_meta * 0.1)
+    u_meta = float(tp.get("u", 1.0))
+    u_visual = args.vis_factor*max(1, u_meta)
 
     # Entities
     rbc = RBCStream(n=rbc_count, L=L, H=H, cap_h=cap_h, u=u_meta, sim_dt=args.sim_dt,
@@ -646,8 +648,8 @@ def main() -> None:
                           flash=args.flash, freq=args.flash_freq, depth=args.flash_depth,
                           bias=args.flash_bias, seed=args.seed + 11)
 
-    def u_fun(xs: np.ndarray) -> np.ndarray:
-        return np.full_like(xs, u_visual, dtype=float)
+    def u_fun(time_factor: float, xs: np.ndarray) -> np.ndarray:
+        return np.full_like(xs, time_factor*u_visual, dtype=float)
 
     o2 = GasSpots(args.o2_spots, L, H, args.fps, color="lime",  size=7, seed=args.seed + 1,
                   flash=args.flash, freq=args.flash_freq, depth=args.flash_depth, bias=args.flash_bias)
@@ -692,7 +694,7 @@ def main() -> None:
         oc_smpl  = make_oc_sampler(Oc_line, L)
         steps = max(1, int(math.ceil(draw_dt / rbc.dt)))
         for _ in range(steps):
-            rbc.step(acid_fun, oc_smpl, u_fun=u_fun)
+            rbc.step(acid_fun, oc_smpl, u_fun=u_fun, xtime=t)
         pre_RBC.append((rbc.x.copy(), rbc.y.copy(), rbc.oxy.copy()))
 
         # Gas steps and snapshots
