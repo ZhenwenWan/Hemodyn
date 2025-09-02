@@ -1,6 +1,6 @@
 
 """
-SciAni14_blitfix.py
+SciAni16.py
 -------------------
 Blitting-safe fix for time_text on Matplotlib:
 - Use axes-level text (ax.text) so artist has a valid Axes (prevents NoneType._get_view crash).
@@ -18,10 +18,14 @@ import math
 import sys
 from typing import Callable, List, Sequence, Tuple
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, FFMpegWriter, writers
 from matplotlib.patches import Circle
+import imageio_ffmpeg
+
+matplotlib.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 
 
 # ============================================================================
@@ -33,15 +37,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--meta", type=str, default="checkpoints/run_meta.json")
     p.add_argument("--nx", type=int, default=120)
     p.add_argument("--ny", type=int, default=72)
-    p.add_argument("--frames", type=int, default=120)   # default aligned with prior run
-    p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--frames", type=int, default=480)   # default aligned with prior run
+    p.add_argument("--fps", type=int, default=300)
     p.add_argument("--seed", type=int, default=7)
-    p.add_argument("--rbc", type=int, default=40)
-    p.add_argument("--myoglobins", type=int, default=16)
-    p.add_argument("--o2_spots", type=int, default=300)
-    p.add_argument("--co_spots", type=int, default=200)
+    p.add_argument("--rbc", type=int, default=20)
+    p.add_argument("--myoglobins", type=int, default=20)
+    p.add_argument("--o2_spots", type=int, default=80)
+    p.add_argument("--co_spots", type=int, default=80)
     p.add_argument("--cap_frac", type=float, default=1.0/3.0)
-    p.add_argument("--vy_factor", type=float, default=0.05)
+    p.add_argument("--vy_factor", type=float, default=0.01)
     p.add_argument("--vy_tau", type=float, default=0.9)
     p.add_argument("--sim_dt", type=float, default=0.01)
     p.add_argument("--sim_rate", type=float, default=1.0)
@@ -55,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--blit", action="store_true",
                    help="Enable Matplotlib blitting")
     # Flashing controls
-    p.add_argument("--flash", action="store_true",
+    p.add_argument("--flash", action="store_false",
                    help="Enable pulsing brightness for all spots")
     p.add_argument("--flash_freq", type=float, default=1.2,
                    help="Pulse frequency (Hz)")
@@ -63,6 +67,14 @@ def parse_args() -> argparse.Namespace:
                    help="Pulse amplitude (0..1)")
     p.add_argument("--flash_bias", type=float, default=0.75,
                    help="Baseline brightness (0..1)")
+    # Saving
+    p.add_argument("--save", action="store_true",
+                   help="Enable saving into a mp4 file named saveFile")
+    p.add_argument("--saveFile", type=str, default="out.mp4",
+                   help="Output MP4 filename. Use empty string to disable saving.")
+    p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--bitrate", type=int, default=3000)
+    p.add_argument("--codec", type=str, default="libx264")
     return p.parse_args()
 
 
@@ -741,7 +753,7 @@ def main() -> None:
 
     ani = FuncAnimation(fig, update, init_func=init,
                         frames=args.frames, interval=1000/args.fps,
-                        blit=args.blit, repeat=True)
+                        blit=args.blit, repeat=False)
 
     # Re-cache blit background when the figure is redrawn or resized
     def _refresh_bg(_evt=None):
@@ -755,7 +767,16 @@ def main() -> None:
     fig.canvas.mpl_connect('resize_event', _refresh_bg)
     fig.canvas.mpl_connect('draw_event',   _refresh_bg)
 
-    plt.show()
+    if args.save:
+        if not writers.is_available("ffmpeg"):
+            print("[WARN] ffmpeg not found on PATH. Install ffmpeg to enable MP4 saving.")
+            print("       Showing animation interactively instead."); plt.show(); return
+        print(f"[INFO] Saving MP4 to: {args.save}")
+        writer = FFMpegWriter(fps=args.fps, codec=args.codec, bitrate=args.bitrate, 
+                              extra_args=["-crf", "18","-preset", "slow","-pix_fmt","yuv420p"])
+        ani.save(args.saveFile, writer=writer, dpi=args.dpi); print("[INFO] Done.")
+    else:
+        plt.show()
 
 
 if __name__ == "__main__":
